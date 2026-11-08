@@ -91,27 +91,30 @@ const mock = http.createServer(async (req, res) => {
     assert(files.includes('work/made.txt'), 'worker sync');
     assert(!files.includes('work/link'), 'symlink excluded');
 
-    // 활동 기록: 로컬 업로드와 방 작업
-    const up = await fetch(`${U}/api/worker/runs`, { method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' }, body: JSON.stringify({ device: 'mac', folder: 'proj', prompt: 'local-task', output: 'local-out', files: [{ path: 'a.txt', status: 'added', diff: '+hi' }] }) });
-    assert.equal(up.status, 200, 'run upload');
-    assert.equal((await fetch(`${U}/api/worker/runs`, { method: 'POST', headers: { authorization: 'Bearer nope.x', 'content-type': 'application/json' }, body: '{}' })).status, 401, 'run auth');
-    let runs = (await A('GET', W('/runs'))).j;
-    assert.equal(runs[0].source, 'local'); assert.equal(runs[0].files[0].diff, '+hi');
-    assert(runs.some(r => r.output === 'worker-done' && r.source === 'local' && r.files.some(f => f.path === 'work/made.txt')), 'room job recorded');
-    assert.equal((await C('GET', W('/runs'))).s, 404, 'runs isolated');
+    // 하나의 공간: 로컬 실행 환경 권한
+    const proj = path.join(tmp, 'proj'); fs.mkdirSync(proj); fs.writeFileSync(path.join(proj, 'old.txt'), 'old\n');
+    const wkId = (await B('GET', W('/state'))).j.agents.find(a => a.name === 'wk').id;
+    assert.equal((await B('POST', W('/threads'), { text: 'x', agentId: wkId, folder: proj })).s, 400, 'folder must be allowed');
+    assert.equal((await fetch(`${U}/api/worker/folders`, { method: 'POST', headers: { authorization: 'Bearer nope.x', 'content-type': 'application/json' }, body: '{}' })).status, 401, 'folders auth');
     if (process.env.MAC_BIN) { // Mac 앱 엔진을 실제 바이너리로 확인
       wrk.kill(); await sleep(500);
-      const proj = path.join(tmp, 'proj'); fs.mkdirSync(proj); fs.writeFileSync(path.join(proj, 'old.txt'), 'old\n');
-      require('child_process').execFileSync(process.env.MAC_BIN, ['--local-run', U, token, proj, 'mac-local-task'], { env, cwd: proj, stdio: 'ignore' });
-      runs = (await A('GET', W('/runs'))).j;
-      assert(runs[0].prompt === 'mac-local-task' && runs[0].output === 'worker-done' && runs[0].folder === 'proj', 'mac local run');
-      assert(runs[0].files.some(f => f.path === 'work/made.txt' && f.status === 'added' && f.diff.includes('from-worker')), 'mac diff');
-      assert(!runs[0].files.some(f => f.path === 'work/link'), 'mac skips symlink');
-      wrk = spawn(process.env.MAC_BIN, ['--worker', U, token], { env, cwd: tmp });
-      await sleep(2500);
+      wrk = spawn(process.env.MAC_BIN, ['--worker', U, token], { env: { ...env, CLAUDUO_FOLDERS: proj }, cwd: tmp });
+      for (let i = 0; i < 40 && !(await B('GET', W('/state'))).j.agents.find(a => a.name === 'wk').folders.includes(proj); i++) await sleep(250);
+      assert.equal((await A('POST', W('/threads'), { text: 'x', agentId: wkId, folder: proj })).s, 403, 'only the Mac owner can run');
+      const made = await B('POST', W('/threads'), { text: 'mac-local-task', agentId: wkId, folder: proj });
+      assert.equal(made.s, 200, 'local thread');
+      let turns = [];
+      for (let i = 0; i < 60 && turns.length < 2; i++) { turns = (await B('GET', W('/threads/' + made.j.id))).j.turns; await sleep(250); }
+      assert.equal(turns[1].text, 'worker-done', 'local reply');
+      assert(turns[1].files.some(f => f.path === 'work/made.txt' && f.status === 'added' && f.diff.includes('from-worker')), 'local diff');
+      assert(!turns[1].files.some(f => f.path === 'work/link'), 'symlink skipped');
+      assert.equal((await A('GET', W('/threads/' + made.j.id))).j.turns.length, 2, 'teammates can see local work');
+      assert.equal((await A('POST', W('/threads/' + made.j.id + '/messages'), { text: 'x' })).s, 403, 'only starter continues');
+      assert.equal((await C('GET', W('/threads/' + made.j.id))).s, 404, 'thread isolated');
+      assert(fs.existsSync(path.join(proj, 'work/made.txt')), 'ran in real folder');
       await A('POST', W('/messages'), { text: '@wk 다시 만들어' });
-      for (let i = 0; i < 40 && (await A('GET', W('/runs'))).j[0].prompt !== '@wk 다시 만들어'; i++) await sleep(250);
-      assert.equal((await A('GET', W('/runs'))).j[0].prompt, '@wk 다시 만들어', 'mac room job');
+      for (let i = 0; i < 40; i++) { if ((await A('GET', W('/state'))).j.messages.filter(m => m.text === 'worker-done').length >= 2) break; await sleep(250); }
+      assert((await A('GET', W('/state'))).j.messages.filter(m => m.text === 'worker-done').length >= 2, 'mac room job');
     }
 
     // 동시 수정 충돌과 되돌리기
@@ -136,7 +139,14 @@ const mock = http.createServer(async (req, res) => {
     assert(!out.includes('sk-ant-good'), 'key not logged');
     const state = (await A('GET', W('/state'))).j;
     assert(!JSON.stringify(state).includes('sk-ant'), 'key not returned');
-    assert((await A('GET', W('/runs'))).j.some(r => r.source === 'cloud' && r.output === 'api-done' && r.files.some(f => f.path === 'api/note.md')), 'cloud run recorded');
+    const apId = state.agents.find(a => a.name === 'ap').id;
+    const ct = (await A('POST', W('/threads'), { text: '클라우드 노트', agentId: apId })).j.id;
+    let ctTurns = [];
+    for (let i = 0; i < 60 && ctTurns.length < 2; i++) { ctTurns = (await A('GET', W('/threads/' + ct))).j.turns; await sleep(250); }
+    assert.equal(ctTurns[1].text, 'api-done', 'cloud thread');
+    const listed = (await A('GET', W('/state'))).j.threads.find(t => t.id === ct);
+    assert.equal(listed.env, 'cloud'); assert.equal(listed.busy, false);
+    assert.equal((await A('DELETE', W('/threads/' + ct))).s, 200);
 
     // 제거
     const wk = state.agents.find(a => a.name === 'wk'), ap = state.agents.find(a => a.name === 'ap');

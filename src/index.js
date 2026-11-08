@@ -82,19 +82,22 @@ export class Workspace extends DurableObject {
       CREATE TABLE IF NOT EXISTS messages (id INTEGER PRIMARY KEY AUTOINCREMENT, author TEXT NOT NULL, kind TEXT, text TEXT NOT NULL, hist INTEGER, created_at INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS files (path TEXT PRIMARY KEY, data BLOB NOT NULL, sha TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS history (id INTEGER PRIMARY KEY AUTOINCREMENT, path TEXT NOT NULL, prev BLOB, existed INTEGER NOT NULL);
-      CREATE TABLE IF NOT EXISTS runs (id INTEGER PRIMARY KEY AUTOINCREMENT, source TEXT NOT NULL, agent TEXT NOT NULL, device TEXT, folder TEXT, prompt TEXT NOT NULL, output TEXT NOT NULL, status TEXT NOT NULL, files TEXT NOT NULL, created_at INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS jobs (id INTEGER PRIMARY KEY AUTOINCREMENT, agent_id TEXT NOT NULL, depth INTEGER NOT NULL, status TEXT NOT NULL DEFAULT 'queued', started_at INTEGER, base TEXT);
+      CREATE TABLE IF NOT EXISTS threads (id TEXT PRIMARY KEY, title TEXT NOT NULL, env TEXT NOT NULL, agent_id TEXT NOT NULL, agent TEXT NOT NULL, folder TEXT, created_by TEXT NOT NULL, author TEXT NOT NULL, updated_at INTEGER NOT NULL);
+      CREATE TABLE IF NOT EXISTS thread_messages (id INTEGER PRIMARY KEY AUTOINCREMENT, thread_id TEXT NOT NULL, role TEXT NOT NULL, text TEXT NOT NULL, files TEXT NOT NULL DEFAULT '[]', created_at INTEGER NOT NULL);
+      CREATE INDEX IF NOT EXISTS thread_messages_t ON thread_messages (thread_id, id);
     `);
+    for (const q of ['ALTER TABLE jobs ADD COLUMN thread_id TEXT', 'ALTER TABLE agents ADD COLUMN folders TEXT']) { try { this.sql.exec(q); } catch {} } // 이미 있으면 무시
   }
   all(q, ...p) { return this.sql.exec(q, ...p).toArray(); }
   one(q, ...p) { return this.all(q, ...p)[0]; }
   online(a) { return a.mode === 'api' || Date.now() - (this.seen.get(a.id) || 0) < 8000; }
   post(author, text, kind = null, hist = null) { this.sql.exec('INSERT INTO messages (author, kind, text, hist, created_at) VALUES (?,?,?,?,?)', author, kind, text, hist, Date.now()); }
-  record(source, agent, device, folder, prompt, output, status, files) {
+  addTurn(thread, role, text, files = []) {
     let f = JSON.stringify(files);
     if (Buffer.byteLength(f) > 1.2e6) f = JSON.stringify(files.map(({ path, status }) => ({ path, status }))); // 행 크기 제한(2MB) 안에 유지
-    this.sql.exec('INSERT INTO runs (source, agent, device, folder, prompt, output, status, files, created_at) VALUES (?,?,?,?,?,?,?,?,?)', source, agent, device, folder, prompt.slice(0, 20000), output.slice(0, 50000), status, f, Date.now());
-    this.sql.exec('DELETE FROM runs WHERE id <= (SELECT MAX(id) FROM runs) - 500');
+    this.sql.exec('INSERT INTO thread_messages (thread_id, role, text, files, created_at) VALUES (?,?,?,?,?)', thread, role, text.slice(0, 50000), f, Date.now());
+    this.sql.exec('UPDATE threads SET updated_at=? WHERE id=?', Date.now(), thread);
   }
   bytes() { return this.one('SELECT COALESCE(SUM(length(data)),0) AS n FROM files').n; }
 
@@ -134,8 +137,11 @@ export class Workspace extends DurableObject {
   }
 
   async snapshot(job, agent) {
+    const thread = job.thread_id && this.one('SELECT * FROM threads WHERE id=?', job.thread_id);
+    if (thread?.env === 'local') return { thread, prompt: this.threadPrompt(thread) }; // 실제 폴더에서 실행하므로 공유 파일 사본이 필요 없다
     const files = this.all('SELECT path, data, sha FROM files').map(f => ({ path: f.path, sha: f.sha, data: Buffer.from(f.data) }));
     this.sql.exec('UPDATE jobs SET base=? WHERE id=?', JSON.stringify(Object.fromEntries(files.map(f => [f.path, f.sha]))), job.id);
+    if (thread) return { thread, files, prompt: this.threadPrompt(thread) };
     const log = this.all('SELECT author, kind, text FROM (SELECT * FROM messages ORDER BY id DESC LIMIT 40) ORDER BY id');
     const { results: people } = await this.env.DB.prepare('SELECT name FROM members WHERE workspace_id=?').bind(this.wsId).all();
     const names = [...people.map(p => p.name), ...this.all('SELECT name FROM agents WHERE id<>?', agent.id).map(a => a.name)];
@@ -145,6 +151,11 @@ export class Workspace extends DurableObject {
 
 ${log.map(m => m.kind === 'change' ? `[변경] ${m.author}: ${m.text}` : `${m.author}: ${m.text}`).join('\n')}`;
     return { files, prompt };
+  }
+
+  threadPrompt(t) {
+    const turns = this.all('SELECT role, text FROM (SELECT * FROM thread_messages WHERE thread_id=? ORDER BY id DESC LIMIT 30) ORDER BY id', t.id);
+    return `지금까지의 대화야. 마지막 사용자 요청을 수행하고 결과를 간결하게 답해.\n\n${turns.map(m => `${m.role === 'user' ? '사용자' : 'Claude'}: ${m.text}`).join('\n\n')}`;
   }
 
   finishJob(job, agent, r) {
@@ -169,9 +180,13 @@ ${log.map(m => m.kind === 'change' ? `[변경] ${m.author}: ${m.text}` : `${m.au
     }
     if (over) this.post('system', '워크스페이스 저장 용량(30MB)을 넘어 일부 파일을 저장하지 못했어요.');
     const reply = String(r.reply || '').slice(0, 20000);
-    const asked = this.one('SELECT text FROM messages WHERE author<>? AND (text LIKE ? OR text LIKE ? OR text LIKE ?) ORDER BY id DESC LIMIT 1', agent.name, `%@${agent.name}%`, '%@all%', '%@모두%');
-    this.record(agent.mode === 'api' ? 'cloud' : 'local', agent.name, null, null, asked?.text || '대화 요청', reply, r.error ? 'error' : 'done',
-      (Array.isArray(r.changes) ? r.changes : []).slice(0, 200).filter(c => safeRel(c.path)).map(c => ({ path: c.path, status: c.data == null ? 'deleted' : 'changed' })));
+    if (job.thread_id) {
+      const local = (Array.isArray(r.files) ? r.files : []).slice(0, 200).filter(f => f && typeof f.path === 'string').map(f => ({ path: f.path.slice(0, 500), status: ['added', 'changed', 'deleted'].includes(f.status) ? f.status : 'changed', diff: String(f.diff ?? '').slice(0, 50000) }));
+      const shared = (Array.isArray(r.changes) ? r.changes : []).slice(0, 200).filter(c => safeRel(c.path)).map(c => ({ path: c.path, status: c.data == null ? 'deleted' : 'changed' }));
+      this.addTurn(job.thread_id, r.error ? 'error' : 'assistant', reply || '(답변 없음)', local.length ? local : shared);
+      this.kick();
+      return true;
+    }
     this.post(agent.name, reply || '(답변 없음)', r.error ? 'error' : null);
     if (!r.error) this.mentions(agent.name, reply, job.depth + 1);
     this.kick();
@@ -243,9 +258,10 @@ ${log.map(m => m.kind === 'change' ? `[변경] ${m.author}: ${m.text}` : `${m.au
       if (!agent) return json(401, { error: '인증 실패' });
       this.seen.set(agent.id, Date.now());
       if (m === 'GET') {
-        const job = this.claim('a.id=?', agent.id);
+        const job = this.claim('a.id=? AND (j.thread_id IS NULL OR ?=1)', agent.id, u.searchParams.get('caps') === 'local' ? 1 : 0);
         if (!job) return json(200, {});
-        const { files, prompt } = await this.snapshot(job, agent);
+        const { files, prompt, thread } = await this.snapshot(job, agent);
+        if (thread?.env === 'local') return json(200, { id: job.id, prompt, folder: thread.folder });
         return json(200, { id: job.id, prompt, files: Object.fromEntries(files.map(f => [f.path, f.data.toString('base64')])) });
       }
       const job = Number.isInteger(body.id) && this.one('SELECT * FROM jobs WHERE id=? AND agent_id=?', body.id, agent.id);
@@ -253,15 +269,12 @@ ${log.map(m => m.kind === 'change' ? `[변경] ${m.author}: ${m.text}` : `${m.au
       return json(200, {});
     }
 
-    if (sub === '/worker/runs' && m === 'POST') {
+    if (sub === '/worker/folders' && m === 'POST') {
       const token = (req.headers.get('authorization') || '').replace('Bearer ', '');
       const agent = token && this.one(`SELECT * FROM agents WHERE token_hash=? AND mode='worker'`, sha(token));
       if (!agent) return json(401, { error: '인증 실패' });
-      const str = (v, n) => String(v ?? '').slice(0, n);
-      const files = (Array.isArray(body.files) ? body.files : []).slice(0, 200).filter(f => f && typeof f.path === 'string').map(f => ({
-        path: f.path.slice(0, 500), status: ['added', 'changed', 'deleted'].includes(f.status) ? f.status : 'changed', diff: str(f.diff, 50000),
-      }));
-      this.record('local', agent.name, str(body.device, 60), str(body.folder, 200), str(body.prompt, 20000), str(body.output, 50000), body.status === 'error' ? 'error' : 'done', files);
+      const folders = (Array.isArray(body.folders) ? body.folders : []).filter(f => typeof f === 'string' && f.startsWith('/')).slice(0, 50).map(f => f.slice(0, 500));
+      this.sql.exec('UPDATE agents SET folders=? WHERE id=?', JSON.stringify(folders), agent.id);
       return json(200, {});
     }
 
@@ -276,7 +289,8 @@ ${log.map(m => m.kind === 'change' ? `[변경] ${m.author}: ${m.text}` : `${m.au
       const since = Math.max(0, Number(u.searchParams.get('since')) || 0);
       const jobs = this.all('SELECT a.name, j.status FROM jobs j JOIN agents a ON a.id=j.agent_id ORDER BY j.id');
       return json(200, {
-        agents: this.all('SELECT id, name, mode, created_by FROM agents ORDER BY name').map(a => ({ id: a.id, name: a.name, mode: a.mode, online: this.online(a), removable: owner || a.created_by === me.userId })),
+        agents: this.all('SELECT id, name, mode, created_by, folders FROM agents ORDER BY name').map(a => ({ id: a.id, name: a.name, mode: a.mode, online: this.online(a), removable: owner || a.created_by === me.userId, folders: a.created_by === me.userId ? JSON.parse(a.folders || '[]') : [] })),
+        threads: this.all(`SELECT t.id, t.title, t.env, t.agent, t.folder, t.author, t.updated_at, t.created_by, (SELECT 1 FROM jobs j WHERE j.thread_id=t.id LIMIT 1) AS busy FROM threads t ORDER BY t.updated_at DESC LIMIT 100`).map(({ created_by, ...t }) => ({ ...t, folder: t.folder && t.folder.split('/').pop(), busy: !!t.busy, mine: created_by === me.userId })),
         messages: this.all('SELECT * FROM (SELECT id, author, kind, text, hist, created_at FROM messages WHERE id>? ORDER BY id DESC LIMIT 300) ORDER BY id', since),
         changes: this.one(`SELECT count(*) AS n FROM messages WHERE kind='change'`).n,
         running: jobs.find(j => j.status === 'running')?.name || null,
@@ -323,9 +337,41 @@ ${log.map(m => m.kind === 'change' ? `[변경] ${m.author}: ${m.text}` : `${m.au
       this.post('system', `${a.name} 를 제거했어요.`);
       return json(200, {});
     }
-    if (sub === '/runs') {
-      const runs = this.all('SELECT * FROM runs ORDER BY id DESC LIMIT 50').map(r => ({ ...r, files: JSON.parse(r.files) }));
-      return json(200, runs);
+    if (sub === '/threads' && m === 'POST') {
+      const text = String(body.text || '').trim().slice(0, 20000);
+      if (!text) return json(400, { error: '내용을 입력해 주세요' });
+      const a = this.one('SELECT * FROM agents WHERE id=?', String(body.agentId));
+      if (!a) return json(400, { error: '실행할 Claude를 골라 주세요' });
+      let folder = null;
+      if (a.mode === 'worker') {
+        if (a.created_by !== me.userId) return json(403, { error: '본인이 연결한 Mac에서만 실행할 수 있어요' }); // 다른 멤버가 내 실제 폴더를 조작하지 못하게 한다
+        folder = String(body.folder || '');
+        if (!JSON.parse(a.folders || '[]').includes(folder)) return json(400, { error: 'Mac 앱에서 허용한 폴더만 쓸 수 있어요' });
+      }
+      const id = randomUUID();
+      this.sql.exec('INSERT INTO threads (id, title, env, agent_id, agent, folder, created_by, author, updated_at) VALUES (?,?,?,?,?,?,?,?,?)', id, text.slice(0, 60), a.mode === 'api' ? 'cloud' : 'local', a.id, a.name, folder, me.userId, me.name, Date.now());
+      this.addTurn(id, 'user', text);
+      this.sql.exec('INSERT INTO jobs (agent_id, depth, thread_id) VALUES (?,0,?)', a.id, id);
+      this.kick();
+      return json(200, { id });
+    }
+    const threadRoute = /^\/threads\/([^/]+)(\/messages)?$/.exec(sub);
+    if (threadRoute) {
+      const t = this.one('SELECT * FROM threads WHERE id=?', threadRoute[1]);
+      if (!t) return json(404, { error: '없는 작업이에요' });
+      if (m === 'GET') return json(200, { turns: this.all('SELECT id, role, text, files, created_at FROM thread_messages WHERE thread_id=? ORDER BY id', t.id).map(x => ({ ...x, files: JSON.parse(x.files) })) });
+      if (t.created_by !== me.userId && !(m === 'DELETE' && owner)) return json(403, { error: '작업을 시작한 사람만 이어갈 수 있어요' });
+      if (m === 'DELETE') { this.sql.exec('DELETE FROM jobs WHERE thread_id=?', t.id); this.sql.exec('DELETE FROM thread_messages WHERE thread_id=?', t.id); this.sql.exec('DELETE FROM threads WHERE id=?', t.id); return json(200, {}); }
+      if (threadRoute[2] && m === 'POST') {
+        const text = String(body.text || '').trim().slice(0, 20000);
+        if (!text) return json(400, { error: '내용을 입력해 주세요' });
+        if (this.one('SELECT 1 AS x FROM jobs WHERE thread_id=?', t.id)) return json(409, { error: '아직 작업 중이에요' });
+        if (!this.one('SELECT 1 AS x FROM agents WHERE id=?', t.agent_id)) return json(400, { error: '이 작업의 Claude가 제거됐어요' });
+        this.addTurn(t.id, 'user', text);
+        this.sql.exec('INSERT INTO jobs (agent_id, depth, thread_id) VALUES (?,0,?)', t.agent_id, t.id);
+        this.kick();
+        return json(200, {});
+      }
     }
     if (sub === '/files') return json(200, this.all('SELECT path FROM files ORDER BY path').map(f => f.path));
     if (sub === '/file') {
@@ -416,12 +462,12 @@ async function handle(req, env) {
 
   if (p === '/healthz') { await env.DB.prepare('SELECT 1').first(); return json(200, { ok: true }); }
 
-  if (p === '/api/worker/job' || p === '/api/worker/runs') { // 토큰 앞부분이 워크스페이스 id
+  if (p === '/api/worker/job' || p === '/api/worker/folders') { // 토큰 앞부분이 워크스페이스 id
     const token = (req.headers.get('authorization') || '').replace('Bearer ', ''), ws = token.split('.')[0];
     if (!ws || !(await env.DB.prepare('SELECT 1 FROM workspaces WHERE id=?').bind(ws).first())) return json(401, { error: '인증 실패' });
     if (m !== 'GET' && m !== 'POST') return json(405, { error: '허용되지 않음' });
     if (+req.headers.get('content-length') > MAX_WORKER_BODY) return json(413, { error: '요청이 너무 커요' });
-    return callDO(env, ws, p.replace('/api', ''), { method: m, headers: { authorization: `Bearer ${token}` }, body: m === 'POST' ? req.body : undefined });
+    return callDO(env, ws, p.replace('/api', '') + u.search, { method: m, headers: { authorization: `Bearer ${token}` }, body: m === 'POST' ? req.body : undefined });
   }
 
   if (m !== 'GET') { // 쿠키 인증 요청의 CSRF 방어
@@ -516,7 +562,7 @@ async function handle(req, env) {
   }
   if (sub === '/messages' && m === 'POST' && await limited(env, 'msg:' + me.id, 60, 60e3)) return json(429, { error: '메시지를 너무 빨리 보내고 있어요' });
   if (sub === '/agents' && m === 'POST' && body.mode === 'api' && await limited(env, 'keycheck:' + me.id, 10, 3600e3)) return json(429, { error: '잠시 뒤 다시 시도해 주세요' });
-  if (['/agent-name', '/system', '/wipe', '/worker/job', '/worker/runs'].includes(sub)) return json(404, { error: '없음' }); // 내부 전용 경로
+  if (['/agent-name', '/system', '/wipe', '/worker/job', '/worker/folders'].includes(sub)) return json(404, { error: '없음' }); // 내부 전용 경로
 
   const res = await callDO(env, ws, sub + u.search, {
     method: m, body: m === 'GET' ? undefined : JSON.stringify(body),

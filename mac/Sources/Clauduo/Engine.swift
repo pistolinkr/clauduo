@@ -98,12 +98,26 @@ struct Client {
 }
 
 /// 방에서 멘션된 작업: 임시 폴더의 사본에서만 실행하므로 다른 멤버의 메시지가 실제 폴더를 건드릴 수 없다.
-func workerLoop(_ c: Client, onStatus: @escaping @Sendable (String) -> Void) async {
+func workerLoop(_ c: Client, folders: @escaping @Sendable () -> [String], onStatus: @escaping @Sendable (String) -> Void) async {
     onStatus("연결됨")
+    var reported: [String]? = nil
     while !Task.isCancelled {
         try? await Task.sleep(nanoseconds: 3_000_000_000)
-        guard let (status, job) = try? await c.call("GET", "/api/worker/job") else { onStatus("서버 연결 재시도 중"); continue }
+        let allowed = folders()
+        if reported != allowed, (try? await c.call("POST", "/api/worker/folders", ["folders": allowed]))?.0 == 200 { reported = allowed }
+        guard let (status, job) = try? await c.call("GET", "/api/worker/job?caps=local") else { onStatus("서버 연결 재시도 중"); continue }
         if status == 401 { onStatus("연결 해제됨: 이 Claude가 제거됐어요"); return }
+        if let id = job["id"], let folder = job["folder"] as? String, let prompt = job["prompt"] as? String {
+            // 서버가 보낸 경로라도 이 Mac에서 허용한 폴더가 아니면 실행하지 않는다
+            guard allowed.contains(folder) else { _ = try? await c.call("POST", "/api/worker/job", ["id": id, "reply": "이 Mac에서 허용하지 않은 폴더예요.", "error": true]); continue }
+            onStatus("로컬 작업 중")
+            let r = await localRun(folder: URL(fileURLWithPath: folder), prompt: prompt)
+            var body: [String: Any] = ["id": id, "reply": r.text, "files": r.files]
+            if !r.ok { body["error"] = true }
+            _ = try? await c.call("POST", "/api/worker/job", body)
+            onStatus("연결됨")
+            continue
+        }
         guard let id = job["id"], let files = job["files"] as? [String: String], let prompt = job["prompt"] as? String else { continue }
         onStatus("방 작업 처리 중")
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("clauduo-\(UUID().uuidString)")
@@ -141,9 +155,4 @@ func localRun(folder: URL, prompt: String) async -> LocalResult {
         if files.count >= 200 { break }
     }
     return LocalResult(ok: r.ok, text: r.text, files: files)
-}
-
-func uploadRun(_ c: Client, folder: URL, prompt: String, result: LocalResult) async -> Bool {
-    let body: [String: Any] = ["device": Host.current().localizedName ?? "Mac", "folder": folder.lastPathComponent, "prompt": prompt, "output": result.text, "status": result.ok ? "done" : "error", "files": result.files]
-    return (try? await c.call("POST", "/api/worker/runs", body))?.0 == 200
 }
