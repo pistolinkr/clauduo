@@ -66,6 +66,9 @@ dialog h3 { margin: 0 0 4px; font-size: 16px; } dialog p { margin: 0 0 12px; col
 .center { max-width: 400px; margin: 14vh auto 0; padding: 26px; width: calc(100% - 32px); display: flex; flex-direction: column; gap: 12px; } .center h1 { font-size: 20px; margin: 0; } .center p { margin: 0; color: var(--dim); font-size: 14px; word-break: keep-all; } .center form { display: flex; flex-direction: column; gap: 8px; }
 .modes { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; } .modes label { border: 1px solid var(--line); border-radius: 10px; padding: 10px; cursor: pointer; font-size: 13px; line-height: 1.35; } .modes label:has(input:checked) { border-color: var(--accent); } .modes input { position: absolute; opacity: 0; } .modes label:has(input:focus-visible) { outline: 2px solid var(--accent); } .modes b { display: block; font-size: 14px; margin-bottom: 2px; } .modes small { color: var(--dim); }
 #cmd { user-select: all; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 10px; margin: 0; } .warn { color: var(--accent) !important; }
+.tab { border: 0; padding: 3px 9px; font-weight: 500; color: var(--dim); } .tab.on { background: var(--hover); color: var(--text); font-weight: 600; }
+#runs { flex: 1; overflow: auto; min-height: 0; padding: 12px; display: flex; flex-direction: column; gap: 8px; } .run { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; flex: none; } .run summary { cursor: pointer; list-style: none; } .run .meta { display: flex; gap: 7px; align-items: center; font-size: 12px; color: var(--dim); flex-wrap: wrap; } .run .q { font-weight: 550; margin-top: 3px; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; } .run[open] .q { display: block; } .badge { font-size: 11px; font-weight: 600; border-radius: 5px; padding: 1px 6px; color: #17130f; } .badge.local { background: oklch(.8 .1 160); } .badge.cloud { background: oklch(.8 .09 250); } .badge.error { background: oklch(.72 .15 25); }
+.run .out { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 13px; margin: 8px 0 0; } .run .fname { font: 12px ui-monospace,monospace; margin-top: 8px; overflow-wrap: anywhere; } .run pre { font: 11.5px/1.5 ui-monospace,monospace; background: var(--bg); border: 1px solid var(--line); border-radius: 7px; padding: 8px; margin: 4px 0 0; overflow: auto; max-height: 320px; } 
 #err { color: var(--bad); font-size: 13px; min-height: 18px; } header .link { color: var(--dim); }
 </style>
 </head>
@@ -82,7 +85,7 @@ dialog h3 { margin: 0 0 4px; font-size: 16px; } dialog p { margin: 0 0 12px; col
   <div id="err" role="alert"></div>
 </div>
 
-<div id="sent" class="card center" hidden><h1>메일을 확인해 주세요</h1><p><b id="sentTo"></b> 로 로그인 링크를 보냈어요. 링크는 15분 동안 유효해요.</p></div>
+<div id="sent" class="card center" hidden><h1>메일을 확인해 주세요</h1><p><b id="sentTo"></b> 로 로그인 링크와 코드를 보냈어요. 15분 동안 유효해요.</p><form id="codeForm"><input id="code" inputmode="numeric" maxlength="6" required placeholder="6자리 코드" aria-label="로그인 코드" autocomplete="one-time-code"><button class="p">코드로 로그인</button></form><div id="codeErr" role="alert" style="color:var(--bad);font-size:13px"></div></div>
 
 <div id="first" class="card center" hidden>
   <h1>워크스페이스 만들기</h1><p>팀이나 프로젝트 이름이면 충분해요.</p>
@@ -114,8 +117,9 @@ dialog h3 { margin: 0 0 4px; font-size: 16px; } dialog p { margin: 0 0 12px; col
       </section>
       <div id="board">
         <section class="card panel" aria-label="대화">
-          <div class="phead"><span>대화</span></div>
+          <div class="phead" role="tablist"><button class="tab on" id="tabChat" role="tab">대화</button><button class="tab" id="tabRuns" role="tab">활동</button></div>
           <div id="log" role="log"></div>
+          <div id="runs" hidden></div>
           <form id="send"><textarea id="text" placeholder="@이름 으로 Claude 호출" aria-label="메시지"></textarea><button class="p">전송</button></form>
         </section>
         <section class="card panel" aria-label="공유 작업공간">
@@ -133,8 +137,8 @@ dialog h3 { margin: 0 0 4px; font-size: 16px; } dialog p { margin: 0 0 12px; col
   <form id="agentForm" class="stack">
     <input id="agentName" required placeholder="이름 (예: 설계)" aria-label="Claude 이름">
     <div class="modes">
-      <label><input type="radio" name="mode" value="worker" checked><b>내 컴퓨터</b><small>Claude Code 계정으로 실행</small></label>
-      <label><input type="radio" name="mode" value="api"><b>API 키</b><small>설치 없이 서버에서 실행</small></label>
+      <label><input type="radio" name="mode" value="worker" checked><b>로컬</b><small>내 컴퓨터의 Claude로 실행</small></label>
+      <label><input type="radio" name="mode" value="api"><b>클라우드</b><small>API 키로 서버에서 실행</small></label>
     </div>
     <input id="agentKey" type="password" placeholder="sk-ant-..." aria-label="Anthropic API 키" autocomplete="off" hidden>
     <p id="keyNote" hidden style="margin:0">키는 암호화해 저장하고 이 Claude를 제거하면 함께 삭제돼요. 사용량은 본인 Anthropic 계정에 청구돼요.</p>
@@ -223,7 +227,7 @@ function renderPeople(s) {
   if (key === peopleKey) return; peopleKey = key;
   const mention = n => () => { $('text').value += `@${n} `; $('text').focus(); };
   $('agents').replaceChildren(...(s.agents.length ? s.agents.map(a => {
-    const busy = s.running === a.name, label = busy ? '작업 중' : a.mode === 'api' ? 'API 키' : a.online ? '접속 중' : '연결 대기';
+    const busy = s.running === a.name, label = busy ? '작업 중' : a.mode === 'api' ? '클라우드' : a.online ? '접속 중' : '연결 대기';
     return row(a.name, label, busy ? 'busy' : a.online ? 'on' : '', mention(a.name), a.removable && (async () => {
       if (!confirm(`${a.name} 를 제거할까요? 연결이 끊기고${a.mode === 'api' ? ' 저장된 API 키도 삭제돼요' : ' 토큰이 무효가 돼요'}.\n작업한 파일은 남아요.`)) return;
       await api('DELETE', w('/agents/' + a.id)); tick();
@@ -237,6 +241,21 @@ function renderPeople(s) {
   }), `${m.name} 내보내기`)));
 }
 
+let runsKey = '';
+async function refreshRuns() {
+  const list = await api('GET', w('/runs')), key = list.length + ':' + (list[0]?.id || 0);
+  if (key === runsKey) return; runsKey = key;
+  $('runs').replaceChildren(...(list.length ? list.map(r => {
+    const d = el('details', 'run'), s = el('summary'), meta = el('div', 'meta');
+    meta.append(el('span', 'badge ' + r.source, r.source === 'local' ? '로컬' : '클라우드'));
+    if (r.status === 'error') meta.append(el('span', 'badge error', '오류'));
+    meta.append(el('span', '', [r.agent, r.device, r.folder].filter(Boolean).join(' · ')), el('span', '', new Date(r.created_at).toLocaleString([], { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })));
+    if (r.files.length) meta.append(el('span', '', `파일 ${r.files.length}개`));
+    s.append(meta, el('div', 'q', r.prompt)); d.append(s, el('div', 'out', r.output));
+    for (const f of r.files) { d.append(el('div', 'fname', `${{ added: '추가', deleted: '삭제' }[f.status] || '수정'} ${f.path}`)); if (f.diff) d.append(el('pre', '', f.diff)); }
+    return d;
+  }) : [el('div', 'empty', '아직 활동이 없어요. 로컬과 클라우드 작업이 여기에 모여요.')]));
+}
 async function tick() {
   const g = gen, s = await api('GET', w('/state?since=') + since);
   if (g !== gen) return;
@@ -250,11 +269,12 @@ async function tick() {
   $('sQueue').textContent = s.queued.length + (s.running ? 1 : 0); $('sChanges').textContent = s.changes;
   $('status').textContent = s.running ? `${s.running} 작업 중` + (s.queued.length ? ` · 대기 ${s.queued.join(', ')}` : '') : s.queued.length ? `접속 대기: ${s.queued.join(', ')}` : '';
   $('status').classList.toggle('live', !!s.running);
+  if (!$('runs').hidden) await refreshRuns();
   if (s.changes !== lastChanges) { lastChanges = s.changes; await refreshFiles(); }
 }
 
 function select(id) {
-  ws = id; store.set('clauduo.ws', id); since = 0; peopleKey = ''; lastChanges = -1; gen++; closeFile();
+  ws = id; store.set('clauduo.ws', id); since = 0; peopleKey = ''; lastChanges = -1; runsKey = ''; gen++; closeFile();
   $('log').replaceChildren(); $('wsSel').value = id;
   $('wsTitle').textContent = wsList.find(x => x.id === id)?.name || '작업실';
   clearTimeout(timer);
@@ -288,6 +308,9 @@ async function createWs(name) { const { id } = await api('POST', '/api/workspace
 $('firstForm').onsubmit = guard(async e => { e.preventDefault(); await createWs($('firstName').value); });
 $('wsNew').onclick = guard(async () => { const n = prompt('새 워크스페이스 이름'); if (n && n.trim()) await createWs(n); });
 $('wsDel').onclick = guard(async () => { const name = wsList.find(x => x.id === ws)?.name; if (prompt(`워크스페이스의 파일과 대화가 모두 영구 삭제돼요.\n삭제하려면 이름을 입력하세요: ${name}`) !== name) return; await api('DELETE', w('')); await boot(); });
+function showTab(runs) { $('runs').hidden = !runs; $('log').hidden = runs; $('send').hidden = runs; $('tabRuns').classList.toggle('on', runs); $('tabChat').classList.toggle('on', !runs); if (runs) refreshRuns().catch(() => {}); }
+$('tabChat').onclick = () => showTab(false); $('tabRuns').onclick = () => showTab(true);
+$('codeForm').onsubmit = async e => { e.preventDefault(); $('codeErr').textContent = ''; try { await api('POST', '/api/auth/verify', { email: $('email').value, code: $('code').value }); await boot(); } catch (x) { $('codeErr').textContent = x.message; } };
 $('wsSel').onchange = () => select($('wsSel').value);
 $('logout').onclick = guard(async () => { await api('POST', '/api/auth/logout'); gen++; clearTimeout(timer); screen('auth'); });
 $('send').onsubmit = guard(async e => { e.preventDefault(); const text = $('text').value; if (!text.trim()) return; $('text').value = ''; await api('POST', w('/messages'), { text }); tick(); });

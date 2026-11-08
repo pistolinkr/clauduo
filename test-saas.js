@@ -53,6 +53,12 @@ const mock = http.createServer(async (req, res) => {
     const stamp = Date.now();
     const A = client(), B = client(), C = client();
     assert.equal((await A('GET', '/api/me')).s, 401, 'no session');
+    const CODE = client(), codeMail = `code${stamp}@x.io`;
+    await CODE('POST', '/api/auth/request', { email: codeMail }); await sleep(400);
+    const code = new RegExp(`login link for ${codeMail}: \\S+ code=(\\d{6})`).exec(out)[1];
+    assert.equal((await CODE('POST', '/api/auth/verify', { email: codeMail, code: code === '000000' ? '111111' : '000000' })).s, 403, 'wrong code');
+    assert.equal((await CODE('POST', '/api/auth/verify', { email: codeMail, code })).s, 200, 'code login');
+    assert.equal((await CODE('GET', '/api/me')).s, 200, 'code session');
     await login(A, `a${stamp}@x.io`); await login(B, `b${stamp}@x.io`); await login(C, `c${stamp}@x.io`);
 
     const r0 = await fetch(`${U}/api/me`, { method: 'POST', headers: { 'content-type': 'application/json', origin: 'https://evil.example' }, body: '{}' });
@@ -85,6 +91,29 @@ const mock = http.createServer(async (req, res) => {
     assert(files.includes('work/made.txt'), 'worker sync');
     assert(!files.includes('work/link'), 'symlink excluded');
 
+    // 활동 기록: 로컬 업로드와 방 작업
+    const up = await fetch(`${U}/api/worker/runs`, { method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' }, body: JSON.stringify({ device: 'mac', folder: 'proj', prompt: 'local-task', output: 'local-out', files: [{ path: 'a.txt', status: 'added', diff: '+hi' }] }) });
+    assert.equal(up.status, 200, 'run upload');
+    assert.equal((await fetch(`${U}/api/worker/runs`, { method: 'POST', headers: { authorization: 'Bearer nope.x', 'content-type': 'application/json' }, body: '{}' })).status, 401, 'run auth');
+    let runs = (await A('GET', W('/runs'))).j;
+    assert.equal(runs[0].source, 'local'); assert.equal(runs[0].files[0].diff, '+hi');
+    assert(runs.some(r => r.output === 'worker-done' && r.source === 'local' && r.files.some(f => f.path === 'work/made.txt')), 'room job recorded');
+    assert.equal((await C('GET', W('/runs'))).s, 404, 'runs isolated');
+    if (process.env.MAC_BIN) { // Mac 앱 엔진을 실제 바이너리로 확인
+      wrk.kill(); await sleep(500);
+      const proj = path.join(tmp, 'proj'); fs.mkdirSync(proj); fs.writeFileSync(path.join(proj, 'old.txt'), 'old\n');
+      require('child_process').execFileSync(process.env.MAC_BIN, ['--local-run', U, token, proj, 'mac-local-task'], { env, cwd: proj, stdio: 'ignore' });
+      runs = (await A('GET', W('/runs'))).j;
+      assert(runs[0].prompt === 'mac-local-task' && runs[0].output === 'worker-done' && runs[0].folder === 'proj', 'mac local run');
+      assert(runs[0].files.some(f => f.path === 'work/made.txt' && f.status === 'added' && f.diff.includes('from-worker')), 'mac diff');
+      assert(!runs[0].files.some(f => f.path === 'work/link'), 'mac skips symlink');
+      wrk = spawn(process.env.MAC_BIN, ['--worker', U, token], { env, cwd: tmp });
+      await sleep(2500);
+      await A('POST', W('/messages'), { text: '@wk 다시 만들어' });
+      for (let i = 0; i < 40 && (await A('GET', W('/runs'))).j[0].prompt !== '@wk 다시 만들어'; i++) await sleep(250);
+      assert.equal((await A('GET', W('/runs'))).j[0].prompt, '@wk 다시 만들어', 'mac room job');
+    }
+
     // 동시 수정 충돌과 되돌리기
     const f = (await A('GET', W('/file?path=work/made.txt'))).j;
     assert.equal((await A('PUT', W('/file'), { path: 'work/made.txt', text: 'edited', base: f.base })).s, 200);
@@ -107,6 +136,7 @@ const mock = http.createServer(async (req, res) => {
     assert(!out.includes('sk-ant-good'), 'key not logged');
     const state = (await A('GET', W('/state'))).j;
     assert(!JSON.stringify(state).includes('sk-ant'), 'key not returned');
+    assert((await A('GET', W('/runs'))).j.some(r => r.source === 'cloud' && r.output === 'api-done' && r.files.some(f => f.path === 'api/note.md')), 'cloud run recorded');
 
     // 제거
     const wk = state.agents.find(a => a.name === 'wk'), ap = state.agents.find(a => a.name === 'ap');

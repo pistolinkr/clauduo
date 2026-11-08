@@ -1,7 +1,7 @@
 // Clauduo on Cloudflare: Worker(인증·라우팅) + D1(계정) + 워크스페이스별 Durable Object(대화·파일·작업).
 import { DurableObject } from 'cloudflare:workers';
 import Anthropic from '@anthropic-ai/sdk';
-import { createHash, createCipheriv, createDecipheriv, randomBytes, randomUUID } from 'node:crypto';
+import { createHash, createCipheriv, createDecipheriv, randomBytes, randomInt, randomUUID } from 'node:crypto';
 
 const MODEL = 'claude-opus-5-5';
 const MAX_FILE = 1.9e6, MAX_WORKSPACE = 30e6, MAX_BODY = 4e6, MAX_WORKER_BODY = 60e6; // D1/DO의 행 크기 제한은 2MB
@@ -82,6 +82,7 @@ export class Workspace extends DurableObject {
       CREATE TABLE IF NOT EXISTS messages (id INTEGER PRIMARY KEY AUTOINCREMENT, author TEXT NOT NULL, kind TEXT, text TEXT NOT NULL, hist INTEGER, created_at INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS files (path TEXT PRIMARY KEY, data BLOB NOT NULL, sha TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS history (id INTEGER PRIMARY KEY AUTOINCREMENT, path TEXT NOT NULL, prev BLOB, existed INTEGER NOT NULL);
+      CREATE TABLE IF NOT EXISTS runs (id INTEGER PRIMARY KEY AUTOINCREMENT, source TEXT NOT NULL, agent TEXT NOT NULL, device TEXT, folder TEXT, prompt TEXT NOT NULL, output TEXT NOT NULL, status TEXT NOT NULL, files TEXT NOT NULL, created_at INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS jobs (id INTEGER PRIMARY KEY AUTOINCREMENT, agent_id TEXT NOT NULL, depth INTEGER NOT NULL, status TEXT NOT NULL DEFAULT 'queued', started_at INTEGER, base TEXT);
     `);
   }
@@ -89,6 +90,12 @@ export class Workspace extends DurableObject {
   one(q, ...p) { return this.all(q, ...p)[0]; }
   online(a) { return a.mode === 'api' || Date.now() - (this.seen.get(a.id) || 0) < 8000; }
   post(author, text, kind = null, hist = null) { this.sql.exec('INSERT INTO messages (author, kind, text, hist, created_at) VALUES (?,?,?,?,?)', author, kind, text, hist, Date.now()); }
+  record(source, agent, device, folder, prompt, output, status, files) {
+    let f = JSON.stringify(files);
+    if (Buffer.byteLength(f) > 1.2e6) f = JSON.stringify(files.map(({ path, status }) => ({ path, status }))); // 행 크기 제한(2MB) 안에 유지
+    this.sql.exec('INSERT INTO runs (source, agent, device, folder, prompt, output, status, files, created_at) VALUES (?,?,?,?,?,?,?,?,?)', source, agent, device, folder, prompt.slice(0, 20000), output.slice(0, 50000), status, f, Date.now());
+    this.sql.exec('DELETE FROM runs WHERE id <= (SELECT MAX(id) FROM runs) - 500');
+  }
   bytes() { return this.one('SELECT COALESCE(SUM(length(data)),0) AS n FROM files').n; }
 
   writeFile(rel, buf, by) { // buf=null이면 삭제. 이전 내용은 되돌리기용으로 남긴다.
@@ -162,6 +169,9 @@ ${log.map(m => m.kind === 'change' ? `[변경] ${m.author}: ${m.text}` : `${m.au
     }
     if (over) this.post('system', '워크스페이스 저장 용량(30MB)을 넘어 일부 파일을 저장하지 못했어요.');
     const reply = String(r.reply || '').slice(0, 20000);
+    const asked = this.one('SELECT text FROM messages WHERE author<>? AND (text LIKE ? OR text LIKE ? OR text LIKE ?) ORDER BY id DESC LIMIT 1', agent.name, `%@${agent.name}%`, '%@all%', '%@모두%');
+    this.record(agent.mode === 'api' ? 'cloud' : 'local', agent.name, null, null, asked?.text || '대화 요청', reply, r.error ? 'error' : 'done',
+      (Array.isArray(r.changes) ? r.changes : []).slice(0, 200).filter(c => safeRel(c.path)).map(c => ({ path: c.path, status: c.data == null ? 'deleted' : 'changed' })));
     this.post(agent.name, reply || '(답변 없음)', r.error ? 'error' : null);
     if (!r.error) this.mentions(agent.name, reply, job.depth + 1);
     this.kick();
@@ -243,6 +253,18 @@ ${log.map(m => m.kind === 'change' ? `[변경] ${m.author}: ${m.text}` : `${m.au
       return json(200, {});
     }
 
+    if (sub === '/worker/runs' && m === 'POST') {
+      const token = (req.headers.get('authorization') || '').replace('Bearer ', '');
+      const agent = token && this.one(`SELECT * FROM agents WHERE token_hash=? AND mode='worker'`, sha(token));
+      if (!agent) return json(401, { error: '인증 실패' });
+      const str = (v, n) => String(v ?? '').slice(0, n);
+      const files = (Array.isArray(body.files) ? body.files : []).slice(0, 200).filter(f => f && typeof f.path === 'string').map(f => ({
+        path: f.path.slice(0, 500), status: ['added', 'changed', 'deleted'].includes(f.status) ? f.status : 'changed', diff: str(f.diff, 50000),
+      }));
+      this.record('local', agent.name, str(body.device, 60), str(body.folder, 200), str(body.prompt, 20000), str(body.output, 50000), body.status === 'error' ? 'error' : 'done', files);
+      return json(200, {});
+    }
+
     if (sub === '/agent-name') return json(200, { taken: !!this.one('SELECT 1 AS x FROM agents WHERE name=?', u.searchParams.get('name')) });
     if (sub === '/system') { this.post('system', String(body.text)); return json(200, {}); }
     if (sub === '/wipe') { await this.ctx.storage.deleteAlarm(); await this.ctx.storage.deleteAll(); return json(200, {}); }
@@ -301,6 +323,10 @@ ${log.map(m => m.kind === 'change' ? `[변경] ${m.author}: ${m.text}` : `${m.au
       this.post('system', `${a.name} 를 제거했어요.`);
       return json(200, {});
     }
+    if (sub === '/runs') {
+      const runs = this.all('SELECT * FROM runs ORDER BY id DESC LIMIT 50').map(r => ({ ...r, files: JSON.parse(r.files) }));
+      return json(200, runs);
+    }
     if (sub === '/files') return json(200, this.all('SELECT path FROM files ORDER BY path').map(f => f.path));
     if (sub === '/file') {
       const rel = safeRel(m === 'GET' ? u.searchParams.get('path') : body.path);
@@ -342,12 +368,12 @@ async function limited(env, key, max, windowMs) {
   return row.n > max;
 }
 
-async function sendLogin(env, email, link) {
-  if (env.DEV_LOG_MAIL) return console.log(`[dev] login link for ${email}: ${link}`);
+async function sendLogin(env, email, link, code) {
+  if (env.DEV_LOG_MAIL) return console.log(`[dev] login link for ${email}: ${link} code=${code}`);
   await env.EMAIL.send({
     from: env.MAIL_FROM || 'login@clauduo.com', to: email, subject: 'Clauduo 로그인 링크',
-    text: `아래 링크를 열면 Clauduo에 로그인돼요. 링크는 15분 동안 한 번만 쓸 수 있어요.\n\n${link}\n\n요청한 적이 없다면 이 메일을 무시해 주세요.`,
-    html: `<p>아래 버튼을 누르면 Clauduo에 로그인돼요. 링크는 15분 동안 한 번만 쓸 수 있어요.</p><p><a href="${link}">Clauduo 로그인</a></p><p>요청한 적이 없다면 이 메일을 무시해 주세요.</p>`,
+    text: `아래 링크를 열면 Clauduo에 로그인돼요. 링크는 15분 동안 한 번만 쓸 수 있어요.\n\n${link}\n\nMac 앱에서는 이 코드를 입력하세요: ${code}\n\n요청한 적이 없다면 이 메일을 무시해 주세요.`,
+    html: `<p>아래 버튼을 누르면 Clauduo에 로그인돼요. 링크는 15분 동안 한 번만 쓸 수 있어요.</p><p><a href="${link}">Clauduo 로그인</a></p><p>Mac 앱에서는 이 코드를 입력하세요: <b>${code}</b></p><p>요청한 적이 없다면 이 메일을 무시해 주세요.</p>`,
   });
 }
 
@@ -390,12 +416,12 @@ async function handle(req, env) {
 
   if (p === '/healthz') { await env.DB.prepare('SELECT 1').first(); return json(200, { ok: true }); }
 
-  if (p === '/api/worker/job') { // 토큰 앞부분이 워크스페이스 id
+  if (p === '/api/worker/job' || p === '/api/worker/runs') { // 토큰 앞부분이 워크스페이스 id
     const token = (req.headers.get('authorization') || '').replace('Bearer ', ''), ws = token.split('.')[0];
     if (!ws || !(await env.DB.prepare('SELECT 1 FROM workspaces WHERE id=?').bind(ws).first())) return json(401, { error: '인증 실패' });
     if (m !== 'GET' && m !== 'POST') return json(405, { error: '허용되지 않음' });
     if (+req.headers.get('content-length') > MAX_WORKER_BODY) return json(413, { error: '요청이 너무 커요' });
-    return callDO(env, ws, '/worker/job', { method: m, headers: { authorization: `Bearer ${token}` }, body: m === 'POST' ? req.body : undefined });
+    return callDO(env, ws, p.replace('/api', ''), { method: m, headers: { authorization: `Bearer ${token}` }, body: m === 'POST' ? req.body : undefined });
   }
 
   if (m !== 'GET') { // 쿠키 인증 요청의 CSRF 방어
@@ -413,13 +439,18 @@ async function handle(req, env) {
       const t = rand();
       await env.DB.prepare('INSERT INTO login_tokens (hash, email, expires_at) VALUES (?,?,?)').bind(sha(t), email, Date.now() + LOGIN_TTL).run();
       const invite = typeof body.invite === 'string' && /^[\w-]{20,}$/.test(body.invite) ? `&invite=${body.invite}` : '';
-      await sendLogin(env, email, `${env.BASE_URL}/app#login=${t}${invite}`);
+      const code = String(randomInt(0, 1e6)).padStart(6, '0');
+      await env.DB.prepare('INSERT OR REPLACE INTO login_tokens (hash, email, expires_at) VALUES (?,?,?)').bind(sha(`code:${email}:${code}`), email, Date.now() + LOGIN_TTL).run();
+      await sendLogin(env, email, `${env.BASE_URL}/app#login=${t}${invite}`, code);
     }
     return json(200, {});
   }
   if (p === '/api/auth/verify' && m === 'POST') {
     if (await limited(env, 'verify:' + ip, 30, LOGIN_TTL)) return json(429, { error: '요청이 너무 많아요' });
-    const row = await env.DB.prepare('DELETE FROM login_tokens WHERE hash=? AND expires_at>? RETURNING email').bind(sha(String(body.token)), Date.now()).first();
+    const email = String(body.email || '').trim().toLowerCase();
+    if (body.code && await limited(env, 'code:' + email, 8, LOGIN_TTL)) return json(429, { error: '시도가 너무 많아요. 새 로그인 메일을 요청해 주세요' }); // 6자리 코드 대입 방어
+    const key = body.code ? `code:${email}:${String(body.code).trim()}` : String(body.token);
+    const row = await env.DB.prepare('DELETE FROM login_tokens WHERE hash=? AND expires_at>? RETURNING email').bind(sha(key), Date.now()).first();
     if (!row) return json(403, { error: '로그인 링크가 만료됐거나 이미 사용됐어요' });
     const user = await env.DB.prepare('INSERT INTO users (id, email, created_at) VALUES (?,?,?) ON CONFLICT (email) DO UPDATE SET email=excluded.email RETURNING id').bind(randomUUID(), row.email, Date.now()).first();
     const sid = rand();
@@ -485,7 +516,7 @@ async function handle(req, env) {
   }
   if (sub === '/messages' && m === 'POST' && await limited(env, 'msg:' + me.id, 60, 60e3)) return json(429, { error: '메시지를 너무 빨리 보내고 있어요' });
   if (sub === '/agents' && m === 'POST' && body.mode === 'api' && await limited(env, 'keycheck:' + me.id, 10, 3600e3)) return json(429, { error: '잠시 뒤 다시 시도해 주세요' });
-  if (['/agent-name', '/system', '/wipe', '/worker/job'].includes(sub)) return json(404, { error: '없음' }); // 내부 전용 경로
+  if (['/agent-name', '/system', '/wipe', '/worker/job', '/worker/runs'].includes(sub)) return json(404, { error: '없음' }); // 내부 전용 경로
 
   const res = await callDO(env, ws, sub + u.search, {
     method: m, body: m === 'GET' ? undefined : JSON.stringify(body),

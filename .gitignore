@@ -2,3 +2,7 @@ data/
 node_modules/
 .DS_Store
 .env
+.wrangler/
+clauduo-worker.js
+mac/.build/
+mac/dist/
