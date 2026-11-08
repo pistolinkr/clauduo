@@ -1,0 +1,327 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Clauduo</title>
+<style>
+:root {
+  color-scheme: light dark;
+  --bg: light-dark(#f7f7f6,#0a0a0a); --side: light-dark(#f1f1ef,#0a0a0a); --card: light-dark(#fff,#141413); --hover: light-dark(#ececea,#222220);
+  --line: light-dark(#e4e4e1,#2a2a28); --text: light-dark(#18181a,#f5f5f4); --dim: light-dark(#71716b,#9a9a93);
+  --primary: light-dark(#18181a,#ededeb); --on-primary: light-dark(#fff,#18181a); --accent: #d97757; --ok: #3fa66b; --bad: #dc4c44;
+}
+* { box-sizing: border-box; } [hidden] { display: none !important; }
+body { margin: 0; height: 100dvh; font: 14px/1.5 system-ui,-apple-system,"Apple SD Gothic Neo",sans-serif; background: var(--bg); color: var(--text); -webkit-font-smoothing: antialiased; }
+button,input,textarea { font: inherit; color: inherit; background: transparent; border: 1px solid var(--line); border-radius: 8px; padding: 7px 11px; }
+input,textarea { background: var(--card); } input:focus-visible,textarea:focus-visible,button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+::placeholder { color: var(--dim); }
+button { cursor: pointer; font-weight: 500; transition: background .15s ease; } button:hover:not(:disabled) { background: var(--hover); } button:disabled { opacity: .4; cursor: default; }
+button.p { background: var(--primary); border-color: var(--primary); color: var(--on-primary); } button.p:hover:not(:disabled) { background: var(--primary); opacity: .88; }
+svg.i { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; flex: none; }
+
+#app { display: grid; grid-template-columns: 256px minmax(0,1fr); height: 100%; }
+#side { background: var(--side); border-right: 1px solid var(--line); padding: 16px 12px 12px; display: flex; flex-direction: column; gap: 14px; min-height: 0; }
+.brand { display: flex; align-items: center; gap: 9px; font-size: 16px; font-weight: 650; padding: 0 6px; letter-spacing: -.01em; }
+.mark { width: 22px; height: 22px; border-radius: 7px; background: var(--accent); position: relative; flex: none; } .mark::after { content: ""; position: absolute; inset: 6px 3px 6px 11px; border-radius: 50%; background: var(--card); box-shadow: -7px 0 0 var(--card); }
+.quick { display: flex; gap: 6px; } .quick .p { flex: 1; display: flex; align-items: center; justify-content: center; gap: 7px; } .icon { padding: 7px 9px; display: inline-flex; align-items: center; }
+.label { font-size: 12px; color: var(--dim); padding: 0 6px 5px; display: flex; justify-content: space-between; }
+#members { overflow: auto; min-height: 0; display: flex; flex-direction: column; gap: 1px; } #memberWrap { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.m { display: flex; align-items: center; gap: 9px; padding: 6px; border-radius: 8px; width: 100%; border: 0; text-align: left; font-weight: 400; }
+.m:disabled { opacity: 1; } .mrow { display: flex; align-items: center; border-radius: 8px; } .mrow:hover { background: var(--hover); } .mrow .m:hover { background: none !important; } .mrow .m { flex: 1; min-width: 0; }
+.ava { width: 28px; height: 28px; border-radius: 50%; display: grid; place-items: center; font-size: 12px; font-weight: 650; color: #17130f; position: relative; flex: none; }
+.ava i { position: absolute; right: -1px; bottom: -1px; width: 10px; height: 10px; border-radius: 50%; border: 2px solid var(--side); background: var(--dim); } .ava i.on { background: var(--ok); } .ava i.busy { background: var(--accent); animation: pulse 1.2s ease-in-out infinite; }
+.who { min-width: 0; line-height: 1.25; } .who b { display: block; font-weight: 550; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; } .who small { color: var(--dim); font-size: 11.5px; }
+.rm { border: 0; padding: 6px; margin-right: 3px; color: var(--dim); opacity: 0; display: inline-flex; } .mrow:hover .rm,.rm:focus-visible { opacity: 1; } .rm:hover:not(:disabled) { color: var(--bad); background: none; }
+@media (hover: none) { .rm { opacity: 1; } }
+@keyframes pulse { 50% { opacity: .35; } } @media (prefers-reduced-motion: reduce) { .ava i.busy { animation: none; } }
+#workerHint { font-size: 12px; color: var(--dim); border: 1px solid var(--line); border-radius: 10px; padding: 9px; } code { user-select: all; overflow-wrap: anywhere; font: 11.5px/1.5 ui-monospace,monospace; color: var(--text); display: block; margin-top: 4px; }
+
+#inset { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+header { height: 56px; flex: none; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 0 22px; border-bottom: 1px solid var(--line); }
+header h1 { font-size: 15px; font-weight: 600; margin: 0; } #status { font-size: 12.5px; color: var(--dim); display: flex; align-items: center; gap: 7px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; } #status.live::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--accent); animation: pulse 1.2s infinite; flex: none; }
+#page { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 14px; padding: 18px 22px 22px; }
+#stats { display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); gap: 14px; flex: none; }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; }
+.stat { padding: 13px 16px; } .stat span { color: var(--dim); font-size: 12.5px; } .stat strong { display: block; font-size: 25px; font-weight: 650; line-height: 1.25; margin-top: 2px; font-variant-numeric: tabular-nums; letter-spacing: -.02em; } .stat strong small { font-size: 14px; color: var(--dim); font-weight: 500; }
+#board { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0,1.15fr) minmax(0,1fr); gap: 14px; }
+.panel { display: flex; flex-direction: column; min-height: 0; min-width: 0; overflow: hidden; } .phead { display: flex; align-items: center; gap: 8px; padding: 11px 16px; border-bottom: 1px solid var(--line); font-weight: 600; flex: none; min-height: 52px; } .phead > span { flex: none; }
+#log { flex: 1; overflow: auto; display: flex; flex-direction: column; gap: 14px; padding: 16px; min-height: 0; }
+.msg { display: flex; gap: 10px; } .body { min-width: 0; flex: 1; } .msg b { margin-right: 6px; font-weight: 600; } .msg time { color: var(--dim); font-size: 11px; } .msg p { margin: 1px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; } .err p { color: var(--bad); }
+.sys { color: var(--dim); font-size: 12px; text-align: center; } .act { color: var(--dim); font-size: 12px; display: flex; align-items: center; gap: 8px; padding-left: 38px; overflow-wrap: anywhere; } .link { border: 0; background: none !important; padding: 0; color: var(--accent); font-size: 12px; flex: none; }
+.empty { color: var(--dim); text-align: center; margin: auto; font-size: 13px; padding: 16px; }
+#send { display: flex; gap: 8px; padding: 12px; border-top: 1px solid var(--line); flex: none; } #send textarea { flex: 1; resize: none; height: 44px; min-width: 0; }
+.newf { margin-left: auto; display: flex; gap: 6px; min-width: 0; flex: 1; justify-content: flex-end; } .newf input { min-width: 0; width: 200px; padding: 4px 9px; font-weight: 400; } .newf button { padding: 4px 8px; flex: none; }
+#files { flex: 0 1 34%; min-height: 72px; overflow: auto; padding: 8px; border-bottom: 1px solid var(--line); display: flex; flex-direction: column; gap: 1px; }
+.dir { font-size: 11.5px; color: var(--dim); padding: 6px 8px 2px; } .f { width: 100%; flex: none; text-align: left; border: 0; padding: 4px 8px 4px 18px; font-weight: 400; font-size: 13px; overflow-wrap: anywhere; border-radius: 6px; } .f.sel { background: var(--hover); font-weight: 550; }
+.fbar { display: flex; align-items: center; gap: 6px; padding: 8px 12px 8px 16px; flex: none; } #cur { font-size: 13px; font-weight: 550; flex: 1; min-width: 0; overflow-wrap: anywhere; } .fbar button { padding: 4px 11px; }
+#editor { flex: 1; min-height: 120px; resize: none; border: 0; border-top: 1px solid var(--line); border-radius: 0; padding: 12px 16px; font: 12.5px/1.65 ui-monospace,monospace; background: transparent; } #editor:focus-visible { outline: 0; }
+
+dialog { border: 1px solid var(--line); border-radius: 14px; background: var(--card); color: var(--text); width: min(420px,calc(100vw - 32px)); padding: 20px; } dialog::backdrop { background: rgb(0 0 0 / .55); }
+dialog h3 { margin: 0 0 4px; font-size: 16px; } dialog p { margin: 0 0 12px; color: var(--dim); font-size: 13px; } .stack { display: flex; flex-direction: column; gap: 8px; } .acts { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; } #inv { width: 100%; font-size: 12.5px; }
+#join { max-width: 400px; margin: 16vh auto 0; padding: 22px; display: flex; flex-direction: column; gap: 12px; width: calc(100% - 32px); } #join h1 { font-size: 18px; margin: 0; } #joinMsg { color: var(--dim); } .row { display: flex; gap: 8px; } .row input { flex: 1; min-width: 0; }
+@media (max-width: 1050px) { #stats { grid-template-columns: repeat(2,minmax(0,1fr)); } #board { grid-template-columns: minmax(0,1fr); flex: none; } .panel { height: 72dvh; } #page { flex: none; } #inset { overflow: auto; } }
+@media (max-width: 720px) { body { height: auto; } #app { grid-template-columns: minmax(0,1fr); height: auto; } #side { border-right: 0; border-bottom: 1px solid var(--line); } #members { max-height: 190px; } header,#page { padding-left: 16px; padding-right: 16px; } #inset { overflow: visible; } .rm { opacity: 1; } .newf input { width: 100%; } }
+#wsSel { width: 100%; font: inherit; font-weight: 550; color: inherit; background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 7px 9px; } .foot { font-size: 12px; color: var(--dim); display: flex; align-items: center; justify-content: space-between; gap: 6px; border-top: 1px solid var(--line); padding: 10px 6px 0; min-width: 0; } .foot span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } .foot .link { color: var(--dim); }
+.lists { flex: 1; min-height: 0; overflow: auto; display: flex; flex-direction: column; gap: 12px; } #members,#agents { overflow: visible; display: flex; flex-direction: column; gap: 1px; }
+.center { max-width: 400px; margin: 14vh auto 0; padding: 26px; width: calc(100% - 32px); display: flex; flex-direction: column; gap: 12px; } .center h1 { font-size: 20px; margin: 0; } .center p { margin: 0; color: var(--dim); font-size: 14px; word-break: keep-all; } .center form { display: flex; flex-direction: column; gap: 8px; }
+.modes { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; } .modes label { border: 1px solid var(--line); border-radius: 10px; padding: 10px; cursor: pointer; font-size: 13px; line-height: 1.35; } .modes label:has(input:checked) { border-color: var(--accent); } .modes input { position: absolute; opacity: 0; } .modes label:has(input:focus-visible) { outline: 2px solid var(--accent); } .modes b { display: block; font-size: 14px; margin-bottom: 2px; } .modes small { color: var(--dim); }
+#cmd { user-select: all; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 10px; margin: 0; } .warn { color: var(--accent) !important; }
+#err { color: var(--bad); font-size: 13px; min-height: 18px; } header .link { color: var(--dim); }
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+  <symbol id="link" viewBox="0 0 24 24"><path d="M10 14a4 4 0 0 0 6 .4l3-3a4 4 0 0 0-5.7-5.7l-1.7 1.7M14 10a4 4 0 0 0-6-.4l-3 3a4 4 0 0 0 5.7 5.7l1.7-1.7"/></symbol>
+  <symbol id="trash" viewBox="0 0 24 24"><path d="M4 7h16M9 7V4h6v3M6.5 7l1 13h9l1-13M10 11v5M14 11v5"/></symbol>
+</svg>
+
+<div id="auth" class="card center" hidden>
+  <h1>Clauduo 로그인</h1><p id="authMsg">이메일로 로그인 링크를 보내드려요. 처음이면 자동으로 가입돼요.</p>
+  <form id="authForm"><input id="email" type="email" required placeholder="you@example.com" aria-label="이메일" autocomplete="email"><button class="p">로그인 링크 받기</button></form>
+  <div id="err" role="alert"></div>
+</div>
+
+<div id="sent" class="card center" hidden><h1>메일을 확인해 주세요</h1><p><b id="sentTo"></b> 로 로그인 링크를 보냈어요. 링크는 15분 동안 유효해요.</p></div>
+
+<div id="first" class="card center" hidden>
+  <h1>워크스페이스 만들기</h1><p>팀이나 프로젝트 이름이면 충분해요.</p>
+  <form id="firstForm"><input id="firstName" required maxlength="60" placeholder="예: 우리 팀" aria-label="워크스페이스 이름"><button class="p">만들기</button></form>
+</div>
+
+<div id="app" hidden>
+  <aside id="side">
+    <div class="brand"><span class="mark"></span>Clauduo</div>
+    <select id="wsSel" aria-label="워크스페이스 선택"></select>
+    <div class="quick">
+      <button class="p" id="agentOpen"><svg class="i"><use href="#plus"/></svg>Claude 추가</button>
+      <button class="icon" id="invOpen" title="팀원 초대" aria-label="팀원 초대"><svg class="i"><use href="#link"/></svg></button>
+    </div>
+    <div class="lists">
+      <div><div class="label"><span>Claude</span><span id="agentCount"></span></div><div id="agents"></div></div>
+      <div><div class="label"><span>팀원</span><span id="memberCount"></span></div><div id="members"></div></div>
+    </div>
+    <div class="foot"><span id="meEmail"></span><button class="link" id="logout">로그아웃</button></div>
+  </aside>
+  <div id="inset">
+    <header><h1 id="wsTitle">작업실</h1><div style="display:flex;gap:14px;align-items:center;min-width:0"><div id="status" role="status"></div><button class="link" id="wsNew">새 워크스페이스</button><button class="link" id="wsDel" hidden>삭제</button></div></header>
+    <div id="page">
+      <section id="stats" aria-label="현황">
+        <div class="card stat"><span>접속 중인 Claude</span><strong id="sOnline">0</strong></div>
+        <div class="card stat"><span>작업 대기열</span><strong id="sQueue">0</strong></div>
+        <div class="card stat"><span>공유 파일</span><strong id="sFiles">0</strong></div>
+        <div class="card stat"><span>변경 기록</span><strong id="sChanges">0</strong></div>
+      </section>
+      <div id="board">
+        <section class="card panel" aria-label="대화">
+          <div class="phead"><span>대화</span></div>
+          <div id="log" role="log"></div>
+          <form id="send"><textarea id="text" placeholder="@이름 으로 Claude 호출" aria-label="메시지"></textarea><button class="p">전송</button></form>
+        </section>
+        <section class="card panel" aria-label="공유 작업공간">
+          <div class="phead"><span>공유 작업공간</span><div class="newf"><input id="newPath" placeholder="폴더/새파일.md" aria-label="새 파일 경로"><button id="newBtn" aria-label="새 파일"><svg class="i"><use href="#plus"/></svg></button></div></div>
+          <div id="files"></div>
+          <div class="fbar"><span id="cur">파일을 선택하세요</span><button id="del" disabled>삭제</button><button class="p" id="save" disabled>저장</button></div>
+          <textarea id="editor" disabled aria-label="파일 내용"></textarea>
+        </section>
+      </div>
+    </div>
+  </div>
+</div>
+
+<dialog id="agentDlg"><h3>Claude 추가</h3><p>워크스페이스에서 부를 이름과 실행 방식을 골라 주세요.</p>
+  <form id="agentForm" class="stack">
+    <input id="agentName" required placeholder="이름 (예: 설계)" aria-label="Claude 이름">
+    <div class="modes">
+      <label><input type="radio" name="mode" value="worker" checked><b>내 컴퓨터</b><small>Claude Code 계정으로 실행</small></label>
+      <label><input type="radio" name="mode" value="api"><b>API 키</b><small>설치 없이 서버에서 실행</small></label>
+    </div>
+    <input id="agentKey" type="password" placeholder="sk-ant-..." aria-label="Anthropic API 키" autocomplete="off" hidden>
+    <p id="keyNote" hidden style="margin:0">키는 암호화해 저장하고 이 Claude를 제거하면 함께 삭제돼요. 사용량은 본인 Anthropic 계정에 청구돼요.</p>
+    <div class="acts"><button type="button" id="agentClose">닫기</button><button class="p" id="agentBtn">추가</button></div>
+  </form></dialog>
+<dialog id="cmdDlg"><h3>내 컴퓨터에서 연결하기</h3><p>Claude Code에 로그인된 터미널에서 실행하고 창을 열어 두세요.</p><code id="cmd"></code><p class="warn" style="margin-top:10px">이 명령어에는 연결 토큰이 들어 있어요. 지금만 표시되니 공유하지 마세요.</p>
+  <div class="acts"><button id="cmdClose">닫기</button><button class="p" id="cmdCopy">복사</button></div></dialog>
+<dialog id="invDlg"><h3>팀원 초대</h3><p>한 번만 쓸 수 있고 7일 동안 유효한 링크예요.</p><input id="inv" readonly aria-label="초대 링크">
+  <div class="acts"><button id="invClose">닫기</button><button class="p" id="invCopy">복사</button></div></dialog>
+
+<script>
+const $ = id => document.getElementById(id);
+const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
+const icon = id => { const s = document.createElementNS('http://www.w3.org/2000/svg', 'svg'); s.setAttribute('class', 'i'); const u = document.createElementNS(s.namespaceURI, 'use'); u.setAttribute('href', '#' + id); s.append(u); return s; };
+const hash = new URLSearchParams(location.hash.slice(1));
+let pendingInvite = hash.get('invite'), ws = null, wsList = [], since = 0, openPath = null, base, me, fileKey = '', peopleKey = '', timer, gen = 0;
+const store = { get: k => { try { return localStorage[k]; } catch {} }, set: (k, v) => { try { localStorage[k] = v; } catch {} } };
+
+async function api(method, url, body) {
+  const r = await fetch(url, { method, credentials: 'same-origin', headers: { 'content-type': 'application/json' }, body: method === 'GET' ? undefined : JSON.stringify(body || {}) });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) { const e = new Error(j.error || '오류가 발생했어요'); e.status = r.status; throw e; }
+  return j;
+}
+const guard = f => async (...a) => { try { await f(...a); } catch (e) { alert(e.message); } };
+const w = p => `/api/w/${ws}${p}`;
+function screen(id) { for (const s of ['auth', 'sent', 'first', 'app']) $(s).hidden = s !== id; }
+
+function avatar(name, status) {
+  let h = 0; for (const c of name) h = (h * 31 + c.codePointAt(0)) % 360;
+  const a = el('span', 'ava', [...name][0].toUpperCase()); a.style.background = `oklch(.78 .1 ${h})`;
+  if (status != null) a.append(el('i', status));
+  return a;
+}
+
+function addMsg(m) {
+  $('logEmpty')?.remove();
+  const box = $('log'), stick = box.scrollHeight - box.scrollTop - box.clientHeight < 80;
+  if (m.author === 'system') box.append(el('div', 'sys', m.text));
+  else if (m.kind === 'change') {
+    const d = el('div', 'act'), b = el('button', 'link', '되돌리기');
+    d.append(el('span', '', `${m.author} · ${m.text}`));
+    b.onclick = guard(async () => { await api('POST', w('/revert'), { hist: m.hist }); tick(); });
+    d.append(b); box.append(d);
+  } else {
+    const d = el('div', 'msg' + (m.kind === 'error' ? ' err' : '')), c = el('div', 'body');
+    c.append(el('b', '', m.author), el('time', '', new Date(m.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })), el('p', '', m.text));
+    d.append(avatar(m.author), c); box.append(d);
+  }
+  if (stick) box.scrollTop = box.scrollHeight;
+}
+
+async function refreshFiles() {
+  const list = await api('GET', w('/files')), key = list.join('\n') + openPath;
+  $('sFiles').textContent = list.length;
+  if (key === fileKey) return; fileKey = key;
+  const out = []; let dir;
+  for (const p of list) {
+    const i = p.indexOf('/'), d = i < 0 ? '' : p.slice(0, i);
+    if (d !== dir) { dir = d; if (d) out.push(el('div', 'dir', d + '/')); }
+    const b = el('button', 'f' + (p === openPath ? ' sel' : ''), p.slice(i + 1)); b.title = p; b.onclick = guard(() => openFile(p)); out.push(b);
+  }
+  $('files').replaceChildren(...(out.length ? out : [el('div', 'empty', '아직 파일이 없어요.')]));
+}
+function closeFile() { openPath = null; $('cur').textContent = '파일을 선택하세요'; $('editor').value = ''; $('editor').disabled = $('save').disabled = $('del').disabled = true; fileKey = ''; }
+async function openFile(p) {
+  const f = await api('GET', w('/file?path=') + encodeURIComponent(p));
+  openPath = p; base = f.base; $('cur').textContent = p;
+  $('editor').value = f.text ?? '(바이너리 파일)';
+  $('editor').disabled = $('save').disabled = f.text == null; $('del').disabled = false;
+  refreshFiles();
+}
+
+function row(name, sub, status, onmention, onremove, title) {
+  const r = el('div', 'mrow'), b = el('button', 'm');
+  b.append(avatar(name, status));
+  const who = el('span', 'who'); who.append(el('b', '', name), el('small', '', sub)); b.append(who);
+  if (onmention) { b.title = '멘션하기'; b.onclick = onmention; } else b.disabled = true;
+  r.append(b);
+  if (onremove) { const rm = el('button', 'rm'); rm.append(icon('trash')); rm.title = rm.ariaLabel = title; rm.onclick = guard(onremove); r.append(rm); }
+  return r;
+}
+
+function renderPeople(s) {
+  const key = JSON.stringify([s.agents, s.members, s.running]);
+  if (key === peopleKey) return; peopleKey = key;
+  const mention = n => () => { $('text').value += `@${n} `; $('text').focus(); };
+  $('agents').replaceChildren(...(s.agents.length ? s.agents.map(a => {
+    const busy = s.running === a.name, label = busy ? '작업 중' : a.mode === 'api' ? 'API 키' : a.online ? '접속 중' : '연결 대기';
+    return row(a.name, label, busy ? 'busy' : a.online ? 'on' : '', mention(a.name), a.removable && (async () => {
+      if (!confirm(`${a.name} 를 제거할까요? 연결이 끊기고${a.mode === 'api' ? ' 저장된 API 키도 삭제돼요' : ' 토큰이 무효가 돼요'}.\n작업한 파일은 남아요.`)) return;
+      await api('DELETE', w('/agents/' + a.id)); tick();
+    }), `${a.name} 제거`);
+  }) : [el('div', 'sys', '아직 Claude가 없어요.')]));
+  $('members').replaceChildren(...s.members.map(m => row(m.name, m.role === 'owner' ? '소유자' : '팀원', null, mention(m.name), m.removable && (async () => {
+    const self = m.id === me.id;
+    if (!confirm(self ? '이 워크스페이스에서 나갈까요?' : `${m.name} 님을 내보낼까요?`)) return;
+    await api('DELETE', w('/members/' + m.id));
+    if (self) return boot(); tick();
+  }), `${m.name} 내보내기`)));
+}
+
+async function tick() {
+  const g = gen, s = await api('GET', w('/state?since=') + since);
+  if (g !== gen) return;
+  me = s.me; s.messages.forEach(addMsg); if (s.messages.length) since = s.messages.at(-1).id;
+  if (!$('log').children.length) $('log').append(Object.assign(el('div', 'empty', 'Claude를 추가하고 @이름 으로 불러보세요.'), { id: 'logEmpty' }));
+  const owner = me.role === 'owner';
+  $('invOpen').hidden = !owner; $('wsDel').hidden = !owner; $('meEmail').textContent = me.email;
+  renderPeople(s);
+  $('agentCount').textContent = s.agents.length; $('memberCount').textContent = s.members.length;
+  $('sOnline').replaceChildren(String(s.agents.filter(a => a.online).length), el('small', '', ` / ${s.agents.length}`));
+  $('sQueue').textContent = s.queued.length + (s.running ? 1 : 0); $('sChanges').textContent = s.changes;
+  $('status').textContent = s.running ? `${s.running} 작업 중` + (s.queued.length ? ` · 대기 ${s.queued.join(', ')}` : '') : s.queued.length ? `접속 대기: ${s.queued.join(', ')}` : '';
+  $('status').classList.toggle('live', !!s.running);
+  await refreshFiles();
+}
+
+function select(id) {
+  ws = id; store.set('clauduo.ws', id); since = 0; peopleKey = ''; gen++; closeFile();
+  $('log').replaceChildren(); $('wsSel').value = id;
+  $('wsTitle').textContent = wsList.find(x => x.id === id)?.name || '작업실';
+  clearTimeout(timer);
+  const g = gen, loop = () => tick().catch(e => { if (e.status === 401) return boot(); if (e.status === 404) return boot(); }).finally(() => { if (g === gen) timer = setTimeout(loop, 1500); });
+  loop();
+}
+
+async function boot(prefer) {
+  gen++; clearTimeout(timer);
+  let meInfo;
+  try { meInfo = await api('GET', '/api/me'); }
+  catch (e) { if (e.status === 401) { if (pendingInvite) $('authMsg').textContent = '초대를 받으셨어요. 이메일로 로그인하면 바로 참여돼요.'; return screen('auth'); } throw e; }
+  if (pendingInvite) {
+    const t = pendingInvite; pendingInvite = null;
+    try { prefer = (await api('POST', '/api/invites/accept', { token: t })).workspace; meInfo = await api('GET', '/api/me'); } catch (e) { alert(e.message); }
+  }
+  wsList = meInfo.workspaces;
+  if (!wsList.length) return screen('first');
+  $('wsSel').replaceChildren(...wsList.map(x => Object.assign(el('option', '', x.name), { value: x.id })));
+  screen('app');
+  const saved = prefer || store.get('clauduo.ws');
+  select(wsList.some(x => x.id === saved) ? saved : wsList[0].id);
+}
+
+$('authForm').onsubmit = async e => {
+  e.preventDefault(); $('err').textContent = '';
+  try { await api('POST', '/api/auth/request', { email: $('email').value, invite: pendingInvite || undefined }); $('sentTo').textContent = $('email').value; screen('sent'); }
+  catch (x) { $('err').textContent = x.message; }
+};
+async function createWs(name) { const { id } = await api('POST', '/api/workspaces', { name }); await boot(id); }
+$('firstForm').onsubmit = guard(async e => { e.preventDefault(); await createWs($('firstName').value); });
+$('wsNew').onclick = guard(async () => { const n = prompt('새 워크스페이스 이름'); if (n && n.trim()) await createWs(n); });
+$('wsDel').onclick = guard(async () => { const name = wsList.find(x => x.id === ws)?.name; if (prompt(`워크스페이스의 파일과 대화가 모두 영구 삭제돼요.\n삭제하려면 이름을 입력하세요: ${name}`) !== name) return; await api('DELETE', w('')); await boot(); });
+$('wsSel').onchange = () => select($('wsSel').value);
+$('logout').onclick = guard(async () => { await api('POST', '/api/auth/logout'); gen++; clearTimeout(timer); screen('auth'); });
+$('send').onsubmit = guard(async e => { e.preventDefault(); const text = $('text').value; if (!text.trim()) return; $('text').value = ''; await api('POST', w('/messages'), { text }); tick(); });
+$('text').onkeydown = e => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); $('send').requestSubmit(); } };
+$('save').onclick = guard(async () => { await api('PUT', w('/file'), { path: openPath, text: $('editor').value, base }); await openFile(openPath); });
+$('del').onclick = guard(async () => { if (!confirm(openPath + ' 삭제할까요? 대화의 되돌리기로 복구할 수 있어요.')) return; await api('DELETE', w('/file'), { path: openPath, base }); closeFile(); refreshFiles(); });
+$('newBtn').onclick = guard(async () => { const p = $('newPath').value.trim(); if (!p) return; await api('PUT', w('/file'), { path: p, text: '' }); $('newPath').value = ''; await openFile(p); });
+
+$('agentOpen').onclick = () => $('agentDlg').showModal();
+$('agentClose').onclick = () => $('agentDlg').close();
+document.querySelectorAll('input[name=mode]').forEach(r => r.onchange = () => { const k = r.value === 'api' && r.checked; if (r.checked) { $('agentKey').hidden = $('keyNote').hidden = !k; $('agentKey').required = k; } });
+$('agentForm').onsubmit = guard(async e => {
+  e.preventDefault(); const mode = document.querySelector('input[name=mode]:checked').value;
+  $('agentBtn').disabled = true;
+  try {
+    const r = await api('POST', w('/agents'), { name: $('agentName').value.trim(), mode, apiKey: mode === 'api' ? $('agentKey').value : undefined });
+    $('agentName').value = $('agentKey').value = ''; $('agentDlg').close();
+    if (r.command) { $('cmd').textContent = r.command; $('cmdCopy').textContent = '복사'; $('cmdDlg').showModal(); }
+    tick();
+  } finally { $('agentBtn').disabled = false; }
+});
+$('cmdClose').onclick = () => { $('cmdDlg').close(); $('cmd').textContent = ''; };
+$('invClose').onclick = () => $('invDlg').close();
+$('invOpen').onclick = guard(async () => { const { url } = await api('POST', w('/invites')); $('inv').value = url; $('invCopy').textContent = '복사'; $('invDlg').showModal(); $('inv').select(); });
+async function copy(text, btn) { try { await navigator.clipboard.writeText(text); btn.textContent = '복사됨'; } catch { btn.textContent = 'Cmd+C로 복사'; } }
+$('invCopy').onclick = () => copy($('inv').value, $('invCopy'));
+$('cmdCopy').onclick = () => copy($('cmd').textContent, $('cmdCopy'));
+
+(async () => {
+  const login = hash.get('login');
+  history.replaceState(0, '', '/app');
+  if (login) { try { await api('POST', '/api/auth/verify', { token: login }); } catch (e) { $('err').textContent = e.message; } }
+  boot().catch(e => alert(e.message));
+})();
+</script>
+</body>
+</html>

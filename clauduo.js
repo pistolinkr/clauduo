@@ -175,7 +175,8 @@ ${log}`;
       if (p === '/api/invites' && req.method === 'POST') {
         if (!me.owner) return send(403, { error: '방장만 할 수 있어요' });
         const invite = rand(); db.invites[invite] = Date.now(); save();
-        return send(200, { url: `http://${req.headers.host}/#invite=${invite}` });
+        const proto = req.headers['x-forwarded-proto'] === 'https' ? 'https' : 'http';
+        return send(200, { url: `${proto}://${req.headers.host}/#invite=${invite}` });
       }
       if (p === '/api/accounts' && req.method === 'POST') {
         if (!me.owner) return send(403, { error: '방장만 할 수 있어요' });
