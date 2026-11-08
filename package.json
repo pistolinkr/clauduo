@@ -2,10 +2,17 @@
   "name": "clauduo",
   "private": true,
   "version": "0.1.0",
-  "engines": { "node": ">=22" },
-  "scripts": { "start": "node server.js", "test": "node test-saas.js" },
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "test": "node test-saas.js",
+    "deploy": "wrangler deploy"
+  },
   "dependencies": {
-    "@anthropic-ai/sdk": "^1.6.0",
-    "pg": "^8.23.1"
+    "@anthropic-ai/sdk": "^1.6.0"
+  },
+  "devDependencies": {
+    "wrangler": "^4.158.0"
   }
 }

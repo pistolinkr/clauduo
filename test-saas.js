@@ -1,4 +1,4 @@
-// DATABASE_URL=postgres://... node test-saas.js : 실제 Postgres, 가짜 Claude/Anthropic API로 전체 흐름을 확인한다
+// node test-saas.js : wrangler dev(로컬 D1·Durable Object)와 가짜 Claude/Anthropic API로 전체 흐름을 확인한다
 const { spawn } = require('child_process'), fs = require('fs'), os = require('os'), path = require('path'), http = require('http'), assert = require('assert');
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'clauduo-saas-'));
 const bin = path.join(tmp, 'claude');
@@ -23,13 +23,17 @@ const mock = http.createServer(async (req, res) => {
 
 (async () => {
   await new Promise(r => mock.listen(MOCK, r));
-  const env = { ...process.env, PORT, BASE_URL: U, CLAUDE_BIN: bin, ANTHROPIC_BASE_URL: `http://localhost:${MOCK}`, CLAUDUO_SECRET: 'test-secret' };
-  const srv = spawn('node', ['server.js'], { env, cwd: __dirname });
+  const env = { ...process.env, CLAUDE_BIN: bin };
+  const vars = path.join(tmp, 'vars'), persist = path.join(tmp, 'state');
+  fs.writeFileSync(vars, `BASE_URL=${U}\nDEV_LOG_MAIL=1\nANTHROPIC_BASE_URL=http://localhost:${MOCK}\nCLAUDUO_SECRET=test-secret\n`);
+  require('child_process').execFileSync('npx', ['wrangler', 'd1', 'execute', 'clauduo', '--local', '--persist-to', persist, '--file', 'schema.sql'], { cwd: __dirname, stdio: 'ignore' });
+  const srv = spawn('npx', ['wrangler', 'dev', '--port', String(PORT), '--persist-to', persist, '--env-file', vars], { env, cwd: __dirname, detached: true });
   let out = ''; srv.stdout.on('data', d => out += d); srv.stderr.on('data', d => out += d);
   let wrk;
   try {
-    for (let i = 0; i < 50 && !out.includes('listening'); i++) await sleep(100);
-    assert(out.includes('listening'), out);
+    for (let i = 0; i < 300 && !out.includes('Ready on'); i++) await sleep(100);
+    assert(out.includes('Ready on'), out);
+    await sleep(1000);
     const client = () => {
       let cookie = '';
       return async (method, p, body) => {
@@ -40,7 +44,7 @@ const mock = http.createServer(async (req, res) => {
     };
     const login = async (c, email, invite) => {
       assert.equal((await c('POST', '/api/auth/request', { email, invite })).s, 200);
-      await sleep(100);
+      await sleep(400);
       const m = [...out.matchAll(new RegExp(`login link for ${email}: \\S+#login=([\\w-]+)`, 'g'))].at(-1);
       const v = await c('POST', '/api/auth/verify', { token: m[1] });
       assert.equal(v.s, 200, 'verify');
@@ -72,7 +76,7 @@ const mock = http.createServer(async (req, res) => {
     const added = (await B('POST', W('/agents'), { name: 'wk', mode: 'worker' })).j;
     assert.equal((await A('POST', W('/agents'), { name: 'wk', mode: 'worker' })).s, 400, 'duplicate name');
     const token = added.command.split(' ').at(-1);
-    wrk = spawn('node', ['worker.js', U, token], { env, cwd: __dirname });
+    wrk = spawn('node', ['public/worker.js', U, token], { env, cwd: __dirname });
     await sleep(2200);
     const waitFor = async (text) => { for (let i = 0; i < 40; i++) { const s = (await A('GET', W('/state'))).j; if (s.messages.some(m => m.text === text)) return s; await sleep(250); } assert.fail('timeout waiting for ' + text); };
     await A('POST', W('/messages'), { text: '@wk 파일 만들어' });
@@ -119,5 +123,5 @@ const mock = http.createServer(async (req, res) => {
     assert.equal((await A('POST', '/api/auth/logout')).s, 200);
     assert.equal((await A('GET', '/api/me')).s, 401, 'logout');
     console.log('ok');
-  } finally { srv.kill(); wrk && wrk.kill(); mock.close(); fs.rmSync(tmp, { recursive: true, force: true }); }
+  } finally { try { process.kill(-srv.pid); } catch {} wrk && wrk.kill(); mock.close(); fs.rmSync(tmp, { recursive: true, force: true }); }
 })().catch(e => { console.error(e); process.exit(1); });

@@ -72,9 +72,6 @@ async function worker(url, token) {
   }
 }
 
-module.exports = { safeRel, sha };
-if (require.main === module) {
-  const [url, token] = process.argv.slice(2);
-  if (url && token) worker(url.replace(/\/$/, ''), token);
-  else console.log('사용법: node worker.js <url> <token>');
-}
+const [url, token] = process.argv.slice(2);
+if (url && token) worker(url.replace(/\/$/, ''), token);
+else console.log('사용법: node clauduo-worker.js <url> <token>');

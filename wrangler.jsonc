@@ -1,0 +1,16 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "clauduo",
+  "main": "src/index.js",
+  "compatibility_date": "2026-10-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "assets": { "directory": "public", "binding": "ASSETS", "run_worker_first": ["/api/*", "/healthz"] },
+  "durable_objects": { "bindings": [{ "name": "WS", "class_name": "Workspace" }] },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Workspace"] }],
+  "d1_databases": [{ "binding": "DB", "database_name": "clauduo", "database_id": "b9ca48a7-b25c-425b-a81f-8b2d571d2daf" }],
+  "send_email": [{ "name": "EMAIL", "allowed_sender_addresses": ["login@clauduo.com"] }],
+  "routes": [{ "pattern": "clauduo.com", "custom_domain": true }],
+  "triggers": { "crons": ["0 3 * * *"] },
+  "vars": { "BASE_URL": "https://clauduo.com" },
+  "observability": { "enabled": true }
+}

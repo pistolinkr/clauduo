@@ -150,7 +150,7 @@ const $ = id => document.getElementById(id);
 const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
 const icon = id => { const s = document.createElementNS('http://www.w3.org/2000/svg', 'svg'); s.setAttribute('class', 'i'); const u = document.createElementNS(s.namespaceURI, 'use'); u.setAttribute('href', '#' + id); s.append(u); return s; };
 const hash = new URLSearchParams(location.hash.slice(1));
-let pendingInvite = hash.get('invite'), ws = null, wsList = [], since = 0, openPath = null, base, me, fileKey = '', peopleKey = '', timer, gen = 0;
+let lastChanges = -1, pendingInvite = hash.get('invite'), ws = null, wsList = [], since = 0, openPath = null, base, me, fileKey = '', peopleKey = '', timer, gen = 0;
 const store = { get: k => { try { return localStorage[k]; } catch {} }, set: (k, v) => { try { localStorage[k] = v; } catch {} } };
 
 async function api(method, url, body) {
@@ -250,15 +250,15 @@ async function tick() {
   $('sQueue').textContent = s.queued.length + (s.running ? 1 : 0); $('sChanges').textContent = s.changes;
   $('status').textContent = s.running ? `${s.running} 작업 중` + (s.queued.length ? ` · 대기 ${s.queued.join(', ')}` : '') : s.queued.length ? `접속 대기: ${s.queued.join(', ')}` : '';
   $('status').classList.toggle('live', !!s.running);
-  await refreshFiles();
+  if (s.changes !== lastChanges) { lastChanges = s.changes; await refreshFiles(); }
 }
 
 function select(id) {
-  ws = id; store.set('clauduo.ws', id); since = 0; peopleKey = ''; gen++; closeFile();
+  ws = id; store.set('clauduo.ws', id); since = 0; peopleKey = ''; lastChanges = -1; gen++; closeFile();
   $('log').replaceChildren(); $('wsSel').value = id;
   $('wsTitle').textContent = wsList.find(x => x.id === id)?.name || '작업실';
   clearTimeout(timer);
-  const g = gen, loop = () => tick().catch(e => { if (e.status === 401) return boot(); if (e.status === 404) return boot(); }).finally(() => { if (g === gen) timer = setTimeout(loop, 1500); });
+  const g = gen, loop = () => (document.hidden ? Promise.resolve() : tick()).catch(e => { if (e.status === 401) return boot(); if (e.status === 404) return boot(); }).finally(() => { if (g === gen) timer = setTimeout(loop, 3000); });
   loop();
 }
 
