@@ -1,0 +1,245 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Clauduo</title>
+<style>
+:root {
+  color-scheme: light dark;
+  --bg: light-dark(#f7f7f6,#0a0a0a); --side: light-dark(#f1f1ef,#0a0a0a); --card: light-dark(#fff,#141413); --hover: light-dark(#ececea,#222220);
+  --line: light-dark(#e4e4e1,#2a2a28); --text: light-dark(#18181a,#f5f5f4); --dim: light-dark(#71716b,#9a9a93);
+  --primary: light-dark(#18181a,#ededeb); --on-primary: light-dark(#fff,#18181a); --accent: #d97757; --ok: #3fa66b; --bad: #dc4c44;
+}
+* { box-sizing: border-box; } [hidden] { display: none !important; }
+body { margin: 0; height: 100dvh; font: 14px/1.5 system-ui,-apple-system,"Apple SD Gothic Neo",sans-serif; background: var(--bg); color: var(--text); -webkit-font-smoothing: antialiased; }
+button,input,textarea { font: inherit; color: inherit; background: transparent; border: 1px solid var(--line); border-radius: 8px; padding: 7px 11px; }
+input,textarea { background: var(--card); } input:focus-visible,textarea:focus-visible,button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+::placeholder { color: var(--dim); }
+button { cursor: pointer; font-weight: 500; transition: background .15s ease; } button:hover:not(:disabled) { background: var(--hover); } button:disabled { opacity: .4; cursor: default; }
+button.p { background: var(--primary); border-color: var(--primary); color: var(--on-primary); } button.p:hover:not(:disabled) { background: var(--primary); opacity: .88; }
+svg.i { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; flex: none; }
+
+#app { display: grid; grid-template-columns: 256px minmax(0,1fr); height: 100%; }
+#side { background: var(--side); border-right: 1px solid var(--line); padding: 16px 12px 12px; display: flex; flex-direction: column; gap: 14px; min-height: 0; }
+.brand { display: flex; align-items: center; gap: 9px; font-size: 16px; font-weight: 650; padding: 0 6px; letter-spacing: -.01em; }
+.mark { width: 22px; height: 22px; border-radius: 7px; background: var(--accent); position: relative; flex: none; } .mark::after { content: ""; position: absolute; inset: 6px 3px 6px 11px; border-radius: 50%; background: var(--card); box-shadow: -7px 0 0 var(--card); }
+.quick { display: flex; gap: 6px; } .quick .p { flex: 1; display: flex; align-items: center; justify-content: center; gap: 7px; } .icon { padding: 7px 9px; display: inline-flex; align-items: center; }
+.label { font-size: 12px; color: var(--dim); padding: 0 6px 5px; display: flex; justify-content: space-between; }
+#members { overflow: auto; min-height: 0; display: flex; flex-direction: column; gap: 1px; } #memberWrap { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.m { display: flex; align-items: center; gap: 9px; padding: 6px; border-radius: 8px; width: 100%; border: 0; text-align: left; font-weight: 400; }
+.m:disabled { opacity: 1; } .mrow { display: flex; align-items: center; border-radius: 8px; } .mrow:hover { background: var(--hover); } .mrow .m:hover { background: none !important; } .mrow .m { flex: 1; min-width: 0; }
+.ava { width: 28px; height: 28px; border-radius: 50%; display: grid; place-items: center; font-size: 12px; font-weight: 650; color: #17130f; position: relative; flex: none; }
+.ava i { position: absolute; right: -1px; bottom: -1px; width: 10px; height: 10px; border-radius: 50%; border: 2px solid var(--side); background: var(--dim); } .ava i.on { background: var(--ok); } .ava i.busy { background: var(--accent); animation: pulse 1.2s ease-in-out infinite; }
+.who { min-width: 0; line-height: 1.25; } .who b { display: block; font-weight: 550; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; } .who small { color: var(--dim); font-size: 11.5px; }
+.rm { border: 0; padding: 6px; margin-right: 3px; color: var(--dim); opacity: 0; display: inline-flex; } .mrow:hover .rm,.rm:focus-visible { opacity: 1; } .rm:hover:not(:disabled) { color: var(--bad); background: none; }
+@media (hover: none) { .rm { opacity: 1; } }
+@keyframes pulse { 50% { opacity: .35; } } @media (prefers-reduced-motion: reduce) { .ava i.busy { animation: none; } }
+#workerHint { font-size: 12px; color: var(--dim); border: 1px solid var(--line); border-radius: 10px; padding: 9px; } code { user-select: all; overflow-wrap: anywhere; font: 11.5px/1.5 ui-monospace,monospace; color: var(--text); display: block; margin-top: 4px; }
+
+#inset { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+header { height: 56px; flex: none; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 0 22px; border-bottom: 1px solid var(--line); }
+header h1 { font-size: 15px; font-weight: 600; margin: 0; } #status { font-size: 12.5px; color: var(--dim); display: flex; align-items: center; gap: 7px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; } #status.live::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--accent); animation: pulse 1.2s infinite; flex: none; }
+#page { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 14px; padding: 18px 22px 22px; }
+#stats { display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); gap: 14px; flex: none; }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; }
+.stat { padding: 13px 16px; } .stat span { color: var(--dim); font-size: 12.5px; } .stat strong { display: block; font-size: 25px; font-weight: 650; line-height: 1.25; margin-top: 2px; font-variant-numeric: tabular-nums; letter-spacing: -.02em; } .stat strong small { font-size: 14px; color: var(--dim); font-weight: 500; }
+#board { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0,1.15fr) minmax(0,1fr); gap: 14px; }
+.panel { display: flex; flex-direction: column; min-height: 0; min-width: 0; overflow: hidden; } .phead { display: flex; align-items: center; gap: 8px; padding: 11px 16px; border-bottom: 1px solid var(--line); font-weight: 600; flex: none; min-height: 52px; } .phead > span { flex: none; }
+#log { flex: 1; overflow: auto; display: flex; flex-direction: column; gap: 14px; padding: 16px; min-height: 0; }
+.msg { display: flex; gap: 10px; } .body { min-width: 0; flex: 1; } .msg b { margin-right: 6px; font-weight: 600; } .msg time { color: var(--dim); font-size: 11px; } .msg p { margin: 1px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; } .err p { color: var(--bad); }
+.sys { color: var(--dim); font-size: 12px; text-align: center; } .act { color: var(--dim); font-size: 12px; display: flex; align-items: center; gap: 8px; padding-left: 38px; overflow-wrap: anywhere; } .link { border: 0; background: none !important; padding: 0; color: var(--accent); font-size: 12px; flex: none; }
+.empty { color: var(--dim); text-align: center; margin: auto; font-size: 13px; padding: 16px; }
+#send { display: flex; gap: 8px; padding: 12px; border-top: 1px solid var(--line); flex: none; } #send textarea { flex: 1; resize: none; height: 44px; min-width: 0; }
+.newf { margin-left: auto; display: flex; gap: 6px; min-width: 0; flex: 1; justify-content: flex-end; } .newf input { min-width: 0; width: 200px; padding: 4px 9px; font-weight: 400; } .newf button { padding: 4px 8px; flex: none; }
+#files { flex: 0 1 34%; min-height: 72px; overflow: auto; padding: 8px; border-bottom: 1px solid var(--line); display: flex; flex-direction: column; gap: 1px; }
+.dir { font-size: 11.5px; color: var(--dim); padding: 6px 8px 2px; } .f { width: 100%; flex: none; text-align: left; border: 0; padding: 4px 8px 4px 18px; font-weight: 400; font-size: 13px; overflow-wrap: anywhere; border-radius: 6px; } .f.sel { background: var(--hover); font-weight: 550; }
+.fbar { display: flex; align-items: center; gap: 6px; padding: 8px 12px 8px 16px; flex: none; } #cur { font-size: 13px; font-weight: 550; flex: 1; min-width: 0; overflow-wrap: anywhere; } .fbar button { padding: 4px 11px; }
+#editor { flex: 1; min-height: 120px; resize: none; border: 0; border-top: 1px solid var(--line); border-radius: 0; padding: 12px 16px; font: 12.5px/1.65 ui-monospace,monospace; background: transparent; } #editor:focus-visible { outline: 0; }
+
+dialog { border: 1px solid var(--line); border-radius: 14px; background: var(--card); color: var(--text); width: min(420px,calc(100vw - 32px)); padding: 20px; } dialog::backdrop { background: rgb(0 0 0 / .55); }
+dialog h3 { margin: 0 0 4px; font-size: 16px; } dialog p { margin: 0 0 12px; color: var(--dim); font-size: 13px; } .stack { display: flex; flex-direction: column; gap: 8px; } .acts { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; } #inv { width: 100%; font-size: 12.5px; }
+#join { max-width: 400px; margin: 16vh auto 0; padding: 22px; display: flex; flex-direction: column; gap: 12px; width: calc(100% - 32px); } #join h1 { font-size: 18px; margin: 0; } #joinMsg { color: var(--dim); } .row { display: flex; gap: 8px; } .row input { flex: 1; min-width: 0; }
+@media (max-width: 1050px) { #stats { grid-template-columns: repeat(2,minmax(0,1fr)); } #board { grid-template-columns: minmax(0,1fr); flex: none; } .panel { height: 72dvh; } #page { flex: none; } #inset { overflow: auto; } }
+@media (max-width: 720px) { body { height: auto; } #app { grid-template-columns: minmax(0,1fr); height: auto; } #side { border-right: 0; border-bottom: 1px solid var(--line); } #members { max-height: 190px; } header,#page { padding-left: 16px; padding-right: 16px; } #inset { overflow: visible; } .rm { opacity: 1; } .newf input { width: 100%; } }
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+  <symbol id="link" viewBox="0 0 24 24"><path d="M10 14a4 4 0 0 0 6 .4l3-3a4 4 0 0 0-5.7-5.7l-1.7 1.7M14 10a4 4 0 0 0-6-.4l-3 3a4 4 0 0 0 5.7 5.7l1.7-1.7"/></symbol>
+  <symbol id="trash" viewBox="0 0 24 24"><path d="M4 7h16M9 7V4h6v3M6.5 7l1 13h9l1-13M10 11v5M14 11v5"/></symbol>
+</svg>
+
+<div id="join" class="card" hidden>
+  <h1>Clauduo 초대</h1><span id="joinMsg">멤버로 쓸 이름을 정해 주세요.</span>
+  <div class="row"><input id="joinName" placeholder="이름 (공백 없이)" aria-label="이름"><button class="p" id="joinBtn">참여</button></div>
+</div>
+
+<div id="app" hidden>
+  <aside id="side">
+    <div class="brand"><span class="mark"></span>Clauduo</div>
+    <div class="quick" id="ownerTools" hidden>
+      <button class="p" id="accOpen"><svg class="i"><use href="#plus"/></svg>Claude 계정 추가</button>
+      <button class="icon" id="invOpen" title="사람 초대" aria-label="사람 초대"><svg class="i"><use href="#link"/></svg></button>
+    </div>
+    <div id="memberWrap"><div class="label"><span>멤버</span><span id="memberCount"></span></div><div id="members"></div></div>
+    <div id="workerHint" hidden>내 Claude를 연결하려면 터미널에서 실행하세요.<code id="workerCmd"></code></div>
+  </aside>
+  <div id="inset">
+    <header><h1>작업실</h1><div id="status" role="status"></div></header>
+    <div id="page">
+      <section id="stats" aria-label="현황">
+        <div class="card stat"><span>접속 중인 Claude</span><strong id="sOnline">0</strong></div>
+        <div class="card stat"><span>작업 대기열</span><strong id="sQueue">0</strong></div>
+        <div class="card stat"><span>공유 파일</span><strong id="sFiles">0</strong></div>
+        <div class="card stat"><span>변경 기록</span><strong id="sChanges">0</strong></div>
+      </section>
+      <div id="board">
+        <section class="card panel" aria-label="대화">
+          <div class="phead"><span>대화</span></div>
+          <div id="log" role="log"><div class="empty" id="logEmpty">멤버를 눌러 멘션하거나 @모두 로 시작해 보세요.</div></div>
+          <form id="send"><textarea id="text" placeholder="@이름 으로 Claude 호출" aria-label="메시지"></textarea><button class="p">전송</button></form>
+        </section>
+        <section class="card panel" aria-label="공유 작업공간">
+          <div class="phead"><span>공유 작업공간</span><div class="newf"><input id="newPath" placeholder="폴더/새파일.md" aria-label="새 파일 경로"><button id="newBtn" aria-label="새 파일"><svg class="i"><use href="#plus"/></svg></button></div></div>
+          <div id="files"></div>
+          <div class="fbar"><span id="cur">파일을 선택하세요</span><button id="del" disabled>삭제</button><button class="p" id="save" disabled>저장</button></div>
+          <textarea id="editor" disabled aria-label="파일 내용"></textarea>
+        </section>
+      </div>
+    </div>
+  </div>
+</div>
+
+<dialog id="accDlg"><h3>Claude 계정 추가</h3><p>이 컴퓨터의 브라우저에 로그인 창이 열려요. 다른 계정을 넣으려면 브라우저 계정을 먼저 바꿔 주세요.</p>
+  <div class="stack"><input id="accName" placeholder="계정 이름" aria-label="계정 이름"><input id="accEmail" type="email" placeholder="이메일 (선택)" aria-label="이메일"></div>
+  <div class="acts"><button id="accClose">닫기</button><button class="p" id="accBtn">로그인 창 열기</button></div></dialog>
+<dialog id="invDlg"><h3>사람 초대</h3><p>한 번만 쓸 수 있고 24시간 동안 유효한 링크예요.</p><input id="inv" readonly aria-label="초대 링크">
+  <div class="acts"><button id="invClose">닫기</button><button class="p" id="invCopy">복사</button></div></dialog>
+
+<script>
+const $ = id => document.getElementById(id);
+const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
+const icon = id => { const s = document.createElementNS('http://www.w3.org/2000/svg', 'svg'); s.setAttribute('class', 'i'); const u = document.createElementNS(s.namespaceURI, 'use'); u.setAttribute('href', '#' + id); s.append(u); return s; };
+const hash = new URLSearchParams(location.hash.slice(1));
+let token, since = 0, open = null, base, me, fileKey = '', memberKey = '';
+try { token = localStorage.clauduo; } catch {}
+function keep(t) { token = t; try { localStorage.clauduo = t; } catch {} }
+if (hash.get('t')) { keep(hash.get('t')); history.replaceState(0, '', '/'); }
+
+async function api(method, url, body) {
+  const r = await fetch(url, { method, headers: { authorization: 'Bearer ' + token, 'content-type': 'application/json' }, body: body && JSON.stringify(body) });
+  const j = await r.json();
+  if (!r.ok) throw new Error(j.error || '오류');
+  return j;
+}
+const guard = f => async (...a) => { try { await f(...a); } catch (e) { alert(e.message); } };
+
+function avatar(name, status) {
+  let h = 0; for (const c of name) h = (h * 31 + c.codePointAt(0)) % 360;
+  const a = el('span', 'ava', [...name][0].toUpperCase()); a.style.background = `oklch(.78 .1 ${h})`;
+  if (status != null) a.append(el('i', status));
+  return a;
+}
+
+function addMsg(m) {
+  $('logEmpty')?.remove();
+  const box = $('log'), stick = box.scrollHeight - box.scrollTop - box.clientHeight < 80;
+  if (m.from === 'system') box.append(el('div', 'sys', m.text));
+  else if (m.kind === 'change') {
+    const d = el('div', 'act'), b = el('button', 'link', '되돌리기');
+    d.append(el('span', '', `${m.from} · ${m.text}`));
+    b.onclick = guard(async () => { await api('POST', '/api/revert', { hist: m.hist }); tick(); });
+    d.append(b); box.append(d);
+  } else {
+    const d = el('div', 'msg' + (m.kind === 'error' ? ' err' : '')), c = el('div', 'body');
+    c.append(el('b', '', m.from), el('time', '', new Date(m.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })), el('p', '', m.text));
+    d.append(avatar(m.from), c); box.append(d);
+  }
+  if (stick) box.scrollTop = box.scrollHeight;
+}
+
+async function refreshFiles() {
+  const list = await api('GET', '/api/files'), key = list.join('\n') + open;
+  $('sFiles').textContent = list.length;
+  if (key === fileKey) return; fileKey = key;
+  const out = []; let dir;
+  for (const p of list) {
+    const i = p.indexOf('/'), d = i < 0 ? '' : p.slice(0, i);
+    if (d !== dir) { dir = d; if (d) out.push(el('div', 'dir', d + '/')); }
+    const b = el('button', 'f' + (p === open ? ' sel' : ''), p.slice(i + 1)); b.title = p; b.onclick = guard(() => openFile(p)); out.push(b);
+  }
+  $('files').replaceChildren(...(out.length ? out : [el('div', 'empty', '아직 파일이 없어요.')]));
+}
+function closeFile() { open = null; $('cur').textContent = '파일을 선택하세요'; $('editor').value = ''; $('editor').disabled = $('save').disabled = $('del').disabled = true; fileKey = ''; }
+async function openFile(p) {
+  const f = await api('GET', '/api/file?path=' + encodeURIComponent(p));
+  open = p; base = f.base; $('cur').textContent = p;
+  $('editor').value = f.text ?? '(바이너리 파일)';
+  $('editor').disabled = $('save').disabled = f.text == null; $('del').disabled = false;
+  refreshFiles();
+}
+
+function memberRow(m, running) {
+  const row = el('div', 'mrow'), b = el('button', 'm');
+  const state = !m.claude ? '사람' : running === m.name ? '작업 중' : m.online ? '접속 중' : '오프라인';
+  b.append(avatar(m.name, running === m.name ? 'busy' : m.online ? 'on' : ''));
+  const who = el('span', 'who'); who.append(el('b', '', m.name), el('small', '', state)); b.append(who);
+  if (m.claude) { b.title = '멘션하기'; b.onclick = () => { $('text').value += `@${m.name} `; $('text').focus(); }; } else b.disabled = true;
+  row.append(b);
+  if (me.owner && !m.owner) {
+    const rm = el('button', 'rm'); rm.append(icon('trash')); rm.title = rm.ariaLabel = `${m.name} 제거`;
+    rm.onclick = guard(async () => {
+      const what = m.local ? `${m.name} 계정을 제거할까요? 이 앱에서 로그아웃되고 방에서 나가요.` : `${m.name} 님을 방에서 내보낼까요?`;
+      if (!confirm(what + `\n${m.name}/ 폴더의 파일은 남아요.`)) return;
+      await api('DELETE', '/api/members', { name: m.name }); tick();
+    });
+    row.append(rm);
+  }
+  return row;
+}
+
+async function tick() {
+  const s = await api('GET', '/api/state?since=' + since);
+  me = s.me; s.messages.forEach(addMsg); if (s.messages.length) since = s.messages.at(-1).id;
+  $('ownerTools').hidden = !me.owner;
+  const self = s.members.find(m => m.name === me.name), claudes = s.members.filter(m => m.claude);
+  $('workerHint').hidden = me.owner || self.online;
+  $('workerCmd').textContent = `curl -o clauduo.js ${location.origin}/clauduo.js && node clauduo.js worker ${location.origin} ${token}`;
+  const key = JSON.stringify([s.members, s.running, me.owner]);
+  if (key !== memberKey) { memberKey = key; $('members').replaceChildren(...s.members.map(m => memberRow(m, s.running))); }
+  $('memberCount').textContent = s.members.length;
+  const on = claudes.filter(m => m.online).length; $('sOnline').replaceChildren(String(on), el('small', '', ` / ${claudes.length}`));
+  $('sQueue').textContent = s.queued.length + (s.running ? 1 : 0); $('sChanges').textContent = s.changes;
+  $('status').textContent = s.running ? `${s.running} 작업 중` + (s.queued.length ? ` · 대기 ${s.queued.join(', ')}` : '') : s.queued.length ? `접속 대기: ${s.queued.join(', ')}` : '';
+  $('status').classList.toggle('live', !!s.running);
+  await refreshFiles();
+}
+
+function start() {
+  $('join').hidden = true; $('app').hidden = false;
+  const loop = () => tick().catch(e => { if (e.message === '인증 실패') { try { localStorage.removeItem('clauduo'); } catch {} location.replace('/'); } }).finally(() => setTimeout(loop, 1500));
+  loop();
+}
+
+$('send').onsubmit = guard(async e => { e.preventDefault(); const text = $('text').value; if (!text.trim()) return; $('text').value = ''; await api('POST', '/api/messages', { text }); tick(); });
+$('text').onkeydown = e => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); $('send').requestSubmit(); } };
+$('save').onclick = guard(async () => { await api('PUT', '/api/file', { path: open, text: $('editor').value, base }); await openFile(open); });
+$('del').onclick = guard(async () => { if (!confirm(open + ' 삭제할까요? 대화의 되돌리기로 복구할 수 있어요.')) return; await api('DELETE', '/api/file', { path: open, base }); closeFile(); refreshFiles(); });
+$('newBtn').onclick = guard(async () => { const path = $('newPath').value.trim(); if (!path) return; await api('PUT', '/api/file', { path, text: '' }); $('newPath').value = ''; await openFile(path); });
+$('accOpen').onclick = () => $('accDlg').showModal(); $('accClose').onclick = () => $('accDlg').close(); $('invClose').onclick = () => $('invDlg').close();
+$('accBtn').onclick = guard(async () => { await api('POST', '/api/accounts', { name: $('accName').value.trim(), email: $('accEmail').value.trim() }); $('accName').value = $('accEmail').value = ''; $('accDlg').close(); $('status').textContent = '브라우저에서 로그인을 마치면 멤버에 나타나요.'; });
+$('invOpen').onclick = guard(async () => { const { url } = await api('POST', '/api/invites'); $('inv').value = url; $('invCopy').textContent = '복사'; $('invDlg').showModal(); $('inv').select(); });
+$('invCopy').onclick = async () => { $('inv').select(); try { await navigator.clipboard.writeText($('inv').value); $('invCopy').textContent = '복사됨'; } catch { $('invCopy').textContent = 'Cmd+C로 복사'; } };
+$('joinBtn').onclick = async () => {
+  try {
+    const r = await fetch('/api/join', { method: 'POST', body: JSON.stringify({ invite: hash.get('invite'), name: $('joinName').value.trim() }) });
+    const j = await r.json(); if (!r.ok) throw new Error(j.error);
+    keep(j.token); history.replaceState(0, '', '/'); start();
+  } catch (e) { $('joinMsg').textContent = e.message; }
+};
+
+if (hash.get('invite')) $('join').hidden = false; else if (token) start(); else { $('join').hidden = false; $('joinMsg').textContent = '서버를 실행한 터미널의 방장 링크나 초대 링크로 들어와 주세요.'; $('joinName').parentElement.hidden = true; }
+</script>
+</body>
+</html>
