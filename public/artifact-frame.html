@@ -1,0 +1,6 @@
+<!doctype html>
+<meta charset="utf-8">
+<script>
+// 앱의 CSP를 물려받지 않도록 별도 문서에서 아티팩트를 그린다. CSP는 _headers 참고.
+addEventListener('message', e => { if (e.source !== parent || typeof e.data !== 'string') return; document.open(); document.write(e.data); document.close(); }, { once: true });
+</script>
