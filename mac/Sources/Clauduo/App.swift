@@ -87,8 +87,8 @@ final class Web: NSObject, WKUIDelegate, WKNavigationDelegate, WKScriptMessageHa
         o.begin { h($0 == .OK ? o.urls : nil) }
     }
     func webView(_ w: WKWebView, decidePolicyFor a: WKNavigationAction, decisionHandler h: @escaping (WKNavigationActionPolicy) -> Void) {
-        // 이 앱에서는 Clauduo만 연다. 다른 주소는 기본 브라우저로 보낸다.
-        if let u = a.request.url, let host = u.host, host != URL(string: siteURL)!.host { NSWorkspace.shared.open(u); return h(.cancel) }
+        // 이 앱에서는 Clauduo만 연다. 다른 주소는 기본 브라우저로 보낸다. 아티팩트 안의 iframe은 그대로 둔다.
+        if a.targetFrame?.isMainFrame != false, let u = a.request.url, let host = u.host, host != URL(string: siteURL)!.host { NSWorkspace.shared.open(u); return h(.cancel) }
         h(.allow)
     }
 }
@@ -108,7 +108,7 @@ enum Destination: Hashable { case view(String), thread(String), agent(String) }
     @Published var site: SiteState?
     @Published var selection: Destination?
 
-    func apply(_ s: SiteState) { site = s; let d = destination(s); if selection != d { selection = d } }
+    func apply(_ s: SiteState) { site = s; let d = destination(s); if selection != d { selection = d }; autoConnect(s) }
 
     private func destination(_ s: SiteState) -> Destination { s.view == "thread" ? .thread(s.cur ?? "") : s.view == "agent" ? .agent(s.agent ?? "") : .view(s.view) }
 
@@ -138,13 +138,13 @@ enum Destination: Hashable { case view(String), thread(String), agent(String) }
     @Published var status: [String: String] = [:]
     @Published var showAdd = false
     @Published var showCustomize = false
-    @Published var showImport = false
     @Published var adding = false
     private var loops: [String: Task<Void, Never>] = [:]
 
     @Published var update: UpdateInfo?
     @Published var updating = false
     private var begun = false
+    private var autoTried = Set<String>()
     var missingTokens: [Account] { accounts.filter { Keychain.load($0.key) == nil } }
     func recoverTokens() { for a in missingTokens { Keychain.recover(a.key); start(a) }; objectWillChange.send() }
 
@@ -197,6 +197,18 @@ enum Destination: Hashable { case view(String), thread(String), agent(String) }
     func link(_ a: Account) async {
         adding = true; defer { adding = false }
         _ = await createAgent(name: a.name == "기본 계정" ? "기본" : a.name, config: a.config, key: "agent-\(UUID().uuidString)")
+    }
+
+    /// 첫 실행에서 내 워크스페이스에 이 Mac의 Claude를 바로 연결한다. 연결을 지운 뒤에는 다시 만들지 않는다.
+    private func autoConnect(_ s: SiteState) {
+        guard begun, s.signedIn, let ws = s.ws, s.workspaces.first(where: { $0.id == ws })?.role == "owner",
+              !accounts.contains(where: { $0.ws == ws || $0.agentId.isEmpty }), // 기기마다 자기 Claude를 연결해야 그 기기의 세션이 올라온다
+              !UserDefaults.standard.bool(forKey: "autoConnected-\(ws)"), autoTried.insert(ws).inserted else { return }
+        let name = s.agents.contains { $0.name == "Claude" } ? "Claude-\(UUID().uuidString.prefix(4))" : "Claude"
+        Task {
+            guard await claudeAuth("status", config: nil), await createAgent(name: name, config: nil, key: "agent-\(UUID().uuidString)") else { return }
+            UserDefaults.standard.set(true, forKey: "autoConnected-\(ws)")
+        }
     }
 
     private func createAgent(name: String, config: String?, key: String) async -> Bool {
@@ -308,14 +320,20 @@ struct Sidebar: View {
             Picker("모드", selection: Binding(get: { model.site?.kind ?? "code" }, set: { model.setKind($0) })) { Text("Chat").tag("chat"); Text("Code").tag("code") }
                 .pickerStyle(.segmented).labelsHidden().padding(.horizontal, 12).padding(.bottom, 4)
         }
-        .safeAreaInset(edge: .bottom) {
+        .safeAreaBar(edge: .bottom) {
             HStack {
                 Text(model.site?.email ?? "").font(.caption).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
                 Spacer()
                 Button("로그아웃") { model.logout() }.buttonStyle(.link).font(.caption)
             }
-            .padding(.horizontal, 14).padding(.vertical, 10)
+            .padding(.horizontal, 14).padding(.top, 26).padding(.bottom, 10)
+            .background {
+                LinearGradient(stops: [.init(color: .clear, location: 0), .init(color: Color(nsColor: .windowBackgroundColor).opacity(0.88), location: 0.5), .init(color: Color(nsColor: .windowBackgroundColor).opacity(0.97), location: 1)], startPoint: .top, endPoint: .bottom)
+                    .ignoresSafeArea()
+                    .allowsHitTesting(false)
+            }
         }
+        .scrollEdgeEffectStyle(.soft, for: .bottom)
         .navigationSplitViewColumnWidth(min: 220, ideal: 260, max: 340)
     }
 }
@@ -349,81 +367,6 @@ struct AddAccount: View {
                 if model.adding { ProgressView().controlSize(.small) } else { Button("추가") { Task { await model.add(name: name, useCurrent: current) } }.disabled(!valid) }
             }
         }
-    }
-}
-
-/// Claude 앱과 Claude Code가 이 Mac에 저장한 세션 중 고른 것만 올린다. 불러온 세션은 본인에게만 보인다.
-struct ImportSessions: View {
-    @ObservedObject var model: Model
-    @State private var key = ""
-    @State private var sessions: [LocalSession] = []
-    @State private var picked = Set<String>()
-    @State private var busy = false
-    @State private var note = ""
-    @State private var done = 0
-    @State private var total = 0
-    @State private var loading = false
-    @State private var opened = Set<String>()
-    private var groups: [(name: String, path: String, items: [LocalSession])] {
-        var out: [(name: String, path: String, items: [LocalSession])] = []
-        for s in sessions { if let i = out.firstIndex(where: { $0.path == s.projectPath }) { out[i].items.append(s) } else { out.append((s.project, s.projectPath, [s])) } }
-        return out
-    }
-    private var account: Account? { model.accounts.first { $0.key == key } }
-    private func load() {
-        picked = []; sessions = []; note = ""; loading = true
-        let config = account?.config
-        Task.detached { let list = listSessions(config: config); await MainActor.run { sessions = list; loading = false } }
-    }
-    private func importAll() async {
-        let a = NSAlert(); a.messageText = "세션 \(sessions.count)개를 모두 불러올까요?"; a.informativeText = "대화 내용이 Clauduo 서버에 저장돼요. 불러온 세션은 나에게만 보여요."
-        a.addButton(withTitle: "모두 불러오기"); a.addButton(withTitle: "취소")
-        if a.runModal() == .alertFirstButtonReturn { await start(sessions) }
-    }
-    private func start(_ list: [LocalSession]) async {
-        guard let a = account, let token = Keychain.load(a.key) else { return }
-        busy = true; defer { busy = false }
-        let c = Client(url: siteURL, token: token)
-        var failed = 0
-        done = 0; total = list.count; note = ""
-        for s in list { if await uploadSession(s, client: c) == false { failed += 1 }; done += 1 }
-        if failed == 0 { model.showImport = false } else { note = "\(failed)개를 불러오지 못했어요." }
-    }
-    var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Picker("계정", selection: $key) { ForEach(model.accounts) { Text($0.name).tag($0.key) } }
-            Text("불러온 세션은 나에게만 보여요. 이어서 작업하려면 해당 폴더를 허용해 주세요.").font(.caption).foregroundStyle(.secondary)
-            List {
-                ForEach(groups, id: \.path) { g in
-                    DisclosureGroup(isExpanded: Binding(get: { opened.contains(g.path) }, set: { if $0 { opened.insert(g.path) } else { opened.remove(g.path) } })) {
-                        ForEach(g.items) { s in
-                            Toggle(isOn: Binding(get: { picked.contains(s.id) }, set: { if $0 { picked.insert(s.id) } else { picked.remove(s.id) } })) {
-                                VStack(alignment: .leading, spacing: 1) {
-                                    Text(s.title).lineLimit(1)
-                                    Text(s.updated.formatted(date: .abbreviated, time: .shortened)).font(.caption).foregroundStyle(.secondary)
-                                }
-                            }
-                        }
-                    } label: {
-                        Toggle(isOn: Binding(get: { g.items.allSatisfy { picked.contains($0.id) } }, set: { on in for s in g.items { if on { picked.insert(s.id) } else { picked.remove(s.id) } } })) {
-                            HStack { Text(g.name).bold().lineLimit(1).help(g.path); Spacer(); Text("\(g.items.count)개").font(.caption).foregroundStyle(.secondary) }
-                        }
-                    }
-                }
-            }.frame(height: 340)
-            HStack {
-                Text(note).font(.caption).foregroundStyle(.red)
-                Spacer()
-                if loading { ProgressView().controlSize(.small); Text("세션 찾는 중").font(.caption).foregroundStyle(.secondary) }
-                if busy { ProgressView().controlSize(.small); Text("\(done)/\(total)").font(.caption.monospacedDigit()).foregroundStyle(.secondary) }
-                Button("닫기") { model.showImport = false }.disabled(busy)
-                Button("전체 불러오기 (\(sessions.count))") { Task { await importAll() } }.disabled(sessions.isEmpty || busy)
-                Button("선택 불러오기 (\(picked.count))") { let list = sessions.filter { picked.contains($0.id) }; Task { await start(list) } }.buttonStyle(.borderedProminent).disabled(picked.isEmpty || busy)
-            }
-        }
-        .padding().frame(width: 560)
-        .onAppear { key = model.accounts.first?.key ?? ""; load() }
-        .onChange(of: key) { _, _ in load() }
     }
 }
 
@@ -497,7 +440,6 @@ struct Root: View {
                     }
                 }
                 ToolbarItemGroup {
-                    Button { model.showImport = true } label: { Label("세션 불러오기", systemImage: "clock.arrow.circlepath") }.disabled(model.accounts.isEmpty)
                     Button { model.showAdd = true } label: { Label("계정 추가", systemImage: "person.crop.circle.badge.plus") }
                     Button { model.addFolder() } label: { Label("폴더 허용", systemImage: "folder.badge.plus") }
                 }
@@ -510,7 +452,6 @@ struct Root: View {
         .font(.custom("Pretendard Variable", size: 13))
         .frame(minWidth: 1000, minHeight: 680)
         .sheet(isPresented: $model.showAdd) { AddAccount(model: model) }
-        .sheet(isPresented: $model.showImport) { ImportSessions(model: model) }
         .sheet(isPresented: $model.showCustomize) { CustomizeAccount(model: model) }
         .onAppear { Web.shared.model = model }
         .onChange(of: model.site?.signedIn) { _, on in withAnimation { columns = on == true ? .all : .detailOnly } }
@@ -523,7 +464,7 @@ struct Onboarding: View {
     @State private var checked = false
     private let items: [(String, String, String)] = [
         ("laptopcomputer", "내 Mac에서 실행", "허용한 폴더에서 이 Mac의 Claude Code가 파일을 읽고 고치며, 선택한 권한에 따라 명령을 실행해요."),
-        ("icloud", "서버에 저장되는 내용", "대화, 작업 기록, 파일 변경 내용, 아티팩트, 불러온 세션은 Clauduo 서버(Cloudflare)에 저장돼요. 팀 작업은 워크스페이스 멤버에게 보이고, 불러온 세션은 나에게만 보여요."),
+        ("icloud", "서버에 저장되는 내용", "대화, 작업 기록, 파일 변경 내용, 아티팩트는 Clauduo 서버(Cloudflare)에 저장돼요. 이 Mac의 Claude 세션 전체도 자동으로 계속 동기화돼요. 팀 작업뿐 아니라 이 Mac의 Claude 세션 내용, 실행 중인 도구와 파일 경로, 진행 상황도 같은 워크스페이스의 모든 멤버에게 실시간으로 보여요."),
         ("key", "로그인과 연결 정보", "Claude 로그인은 Claude의 공식 절차로 진행되고 Clauduo 서버로 보내지 않아요. Clauduo 연결 토큰은 이 Mac의 사용자 전용 파일에 저장돼요."),
         ("exclamationmark.triangle", "베타 서비스", "기능과 데이터가 바뀌거나 사라질 수 있어요. 중요한 파일은 따로 백업해 주세요. Claude 사용량과 요금, 각 계정의 약관 준수는 사용자 책임이에요."),
         ("building.2", "독립 서비스", "Clauduo는 Anthropic과 제휴 관계가 없는 독립 서비스예요."),
@@ -554,7 +495,7 @@ struct Onboarding: View {
     }
 }
 
-let consentVersion = 1
+let consentVersion = 3
 
 struct ClauduoApp: App {
     @StateObject private var model = Model()
@@ -581,11 +522,10 @@ struct ClauduoApp: App {
             Task { guard let u = await Updater.check() else { exit(3) }; do { try await Updater.install(u, relaunch: false); exit(0) } catch { print(error.localizedDescription); exit(1) } }
             dispatchMain()
         }
-        if a.count == 5, a[1] == "--import" {
+        if a.count == 5, a[1] == "--sync" { // 세션 동기화 1회
             Task {
-                let config = a[4].isEmpty ? nil : a[4], c = Client(url: a[2], token: a[3])
-                for s in listSessions(config: config) where await uploadSession(s, client: c) == false { exit(1) }
-                exit(0)
+                var sent: [String: Date] = [:], kept: [String]? = nil
+                exit(await syncSessions(Client(url: a[2], token: a[3]), config: a[4].isEmpty ? nil : a[4], sent: &sent, kept: &kept) ? 0 : 1)
             }
             dispatchMain()
         }

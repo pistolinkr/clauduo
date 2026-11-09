@@ -59,7 +59,7 @@ private func claudeEnv(_ config: String?) -> [String: String] {
     return env
 }
 
-func claudeAuth(_ action: String, config: String) async -> Bool {
+func claudeAuth(_ action: String, config: String?) async -> Bool {
     guard let claude = findClaude() else { return false }
     return await execute(claude, ["auth", action], cwd: nil, input: Data(), env: claudeEnv(config)).code == 0
 }
@@ -126,6 +126,14 @@ struct Client {
 /// 방에서 멘션된 작업: 임시 폴더의 사본에서만 실행하므로 다른 멤버의 메시지가 실제 폴더를 건드릴 수 없다.
 func workerLoop(_ c: Client, config: String?, fullAccessAllowed: @escaping @Sendable () -> Bool, folders: @escaping @Sendable () -> [String], onStatus: @escaping @Sendable (String) -> Void) async {
     onStatus("연결됨")
+    let sync = Task.detached { // 작업 중에도 멈추지 않게 따로 돈다
+        var sent: [String: Date] = [:], kept: [String]? = nil
+        while !Task.isCancelled {
+            _ = await syncSessions(c, config: config, sent: &sent, kept: &kept)
+            try? await Task.sleep(nanoseconds: 5_000_000_000) // ponytail: 5초 폴링, 지연이 문제 되면 FSEvents로 바꾼다
+        }
+    }
+    defer { sync.cancel() }
     var reported: [String]? = nil, lastScan = Date.distantPast, sent: [String: String] = [:]
     while !Task.isCancelled {
         try? await Task.sleep(nanoseconds: 3_000_000_000)
@@ -141,22 +149,29 @@ func workerLoop(_ c: Client, config: String?, fullAccessAllowed: @escaping @Send
         guard let (status, job) = try? await c.call("GET", "/api/worker/job?caps=local") else { onStatus("서버 연결 재시도 중"); continue }
         if status == 401 { onStatus("연결 해제됨: 이 Claude가 제거됐어요"); return }
         if let id = job["id"] as? Int, job["local"] as? Bool == true, let prompt = job["prompt"] as? String {
-            let folder = job["folder"] as? String, chat = job["chat"] as? Bool == true
+            let folder = job["folder"] as? String, chat = job["chat"] as? Bool == true, room = job["room"] as? Bool == true
             // 서버가 보낸 값이라도 이 Mac의 설정을 벗어나면 실행하지 않는다
             let mode = job["mode"] as? String ?? "auto"
             func refuse(_ m: String) async { _ = try? await c.call("POST", "/api/worker/job", ["id": id, "reply": m, "error": true]) }
-            guard chat || folder.map(allowed.contains) == true else { await refuse("이 Mac에서 허용하지 않은 폴더예요."); continue }
+            // Claude에 이미 있는 세션은 그 세션의 폴더에서 바로 이어간다. 동기화된 세션은 서버에서 본인에게만 열린다.
+            let synced = folder != nil && (job["session"] as? String).flatMap(cleanArg).flatMap { sessionFolder($0, config: config) } == folder
+            guard chat || synced || folder.map(allowed.contains) == true else { await refuse("이 Mac에서 허용하지 않은 폴더예요."); continue }
             // 대화 모드는 폴더 없이 계정별 전용 공간에서 실행한다
-            let cwd = folder.map { URL(fileURLWithPath: $0) } ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("Clauduo/chat/\(sha(Data((config ?? "default").utf8)).prefix(16))")
+            let cwd = room ? URL(fileURLWithPath: NSHomeDirectory()) : folder.map { URL(fileURLWithPath: $0) } ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("Clauduo/chat/\(sha(Data((config ?? "default").utf8)).prefix(16))")
             try? FileManager.default.createDirectory(at: cwd, withIntermediateDirectories: true)
             guard ["auto", "acceptEdits", "plan", "bypassPermissions"].contains(mode) else { await refuse("지원하지 않는 권한 모드예요."); continue }
             if mode == "bypassPermissions", !fullAccessAllowed() { await refuse("이 Mac에서 전체 권한이 꺼져 있어요. Mac 앱 사이드바에서 켜 주세요."); continue }
             onStatus("작업 중")
-            let opts = RunOptions(session: (job["session"] as? String).flatMap(cleanArg), model: (job["model"] as? String).flatMap(cleanArg), mode: mode, instructions: job["instructions"] as? String ?? "", artifactPrefix: folder.map { URL(fileURLWithPath: $0).lastPathComponent + "/" } ?? "")
-            let r = await localRun(folder: cwd, prompt: prompt, config: config, opts: opts) { text, tools in
+            let opts = RunOptions(session: (job["session"] as? String).flatMap(cleanArg), model: (job["model"] as? String).flatMap(cleanArg), effort: (job["effort"] as? String).flatMap { ["low", "medium", "high", "xhigh", "max"].contains($0) ? $0 : nil }, mode: mode, instructions: job["instructions"] as? String ?? "", artifactPrefix: folder.map { URL(fileURLWithPath: $0).lastPathComponent + "/" } ?? "", plain: room)
+            let tick: @Sendable (String, [String]) async -> Bool = { text, tools in
                 let (_, o) = (try? await c.call("POST", "/api/worker/progress", ["id": id, "text": text, "tools": tools])) ?? (0, [:])
                 return o["cancel"] as? Bool ?? false
             }
+            let r: LocalResult
+            if room { // 홈 폴더 전체를 훑어 변경을 모으지 않는다
+                let s = await runClaudeStream(cwd: cwd, prompt: prompt, config: config, opts: opts, onTick: tick)
+                r = LocalResult(ok: s.ok, text: s.text, files: [], tools: s.tools, session: nil, artifacts: [])
+            } else { r = await localRun(folder: cwd, prompt: prompt, config: config, opts: opts, onTick: tick) }
             var body: [String: Any] = ["id": id, "reply": r.text, "files": chat ? [] : r.files, "tools": r.tools, "artifacts": r.artifacts]
             if let session = r.session { body["session"] = session }
             if !r.ok { body["error"] = true }
@@ -187,7 +202,7 @@ func workerLoop(_ c: Client, config: String?, fullAccessAllowed: @escaping @Send
     }
 }
 
-struct RunOptions: Sendable { var session, model: String?; var mode: String; var instructions = ""; var artifactPrefix = "" }
+struct RunOptions: Sendable { var session, model, effort: String?; var mode: String; var instructions = ""; var artifactPrefix = ""; var plain = false }
 
 private func artifactTitle(_ prefix: String, _ rel: String) -> String { prefix + (rel as NSString).deletingPathExtension }
 
@@ -219,8 +234,9 @@ func runClaudeStream(cwd: URL, prompt: String, config: String?, opts: RunOptions
     guard let claude = findClaude() else { return StreamResult(ok: false, text: "Claude Code를 찾지 못했어요. 먼저 설치하고 로그인해 주세요.") }
     var args = ["-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--permission-mode", opts.mode]
     if let m = opts.model { args += ["--model", m] }
+    if let e = opts.effort { args += ["--effort", e] }
     if let s = opts.session { args += ["--resume", s] }
-    args += ["--append-system-prompt", "사용자가 볼 HTML 페이지나 문서를 만들 때는 현재 폴더의 artifacts/이름.html 로 저장해.\(opts.instructions.isEmpty ? "" : "\n\n워크스페이스 지침:\n\(opts.instructions)")"]
+    if !opts.plain { args += ["--append-system-prompt", "사용자가 볼 HTML 페이지나 문서를 만들 때는 현재 폴더의 artifacts/이름.html 로 저장해.\(opts.instructions.isEmpty ? "" : "\n\n워크스페이스 지침:\n\(opts.instructions)")"] }
     let p = Process(), o = Pipe(), e = Pipe(), i = Pipe()
     p.executableURL = URL(fileURLWithPath: claude); p.arguments = args; p.currentDirectoryURL = cwd; p.environment = claudeEnv(config)
     p.standardOutput = o; p.standardError = e; p.standardInput = i
@@ -276,7 +292,7 @@ func localRun(folder: URL, prompt: String, config: String?, opts: RunOptions, on
     return LocalResult(ok: r.ok, text: r.text, files: files, tools: r.tools, session: r.session, artifacts: artifacts)
 }
 
-// ---- Claude Code/앱이 이 Mac에 저장한 세션 불러오기 ----
+// ---- Claude Code/앱이 이 Mac에 저장한 세션 자동 동기화 ----
 struct LocalSession: Identifiable, Hashable, Sendable {
     let id, title, cwd: String; let updated: Date; let path: String
     /// Claude의 작업트리에서 한 세션은 원래 프로젝트로 묶는다.
@@ -299,24 +315,48 @@ private func lines(_ data: Data) -> [[String: Any]] {
     data.split(separator: 10).compactMap { (try? JSONSerialization.jsonObject(with: Data($0))) as? [String: Any] }
 }
 
-/// 최근 세션 목록. 앞부분만 읽어 큰 기록에서도 빠르게 동작한다.
-func listSessions(config: String?) -> [LocalSession] {
+/// 세션 파일 목록(최근 순). 폴더를 읽지 못하면 nil이라서, 일시적 오류로 세션을 지우지 않는다.
+func sessionFiles(_ config: String?) -> [(url: URL, date: Date)]? {
     let fm = FileManager.default, root = sessionsRoot(config)
-    var found: [(URL, Date)] = []
-    for dir in (try? fm.contentsOfDirectory(at: root, includingPropertiesForKeys: nil)) ?? [] {
-        for f in (try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: [.contentModificationDateKey])) ?? [] where f.pathExtension == "jsonl" && cleanArg(f.deletingPathExtension().lastPathComponent) != nil {
+    guard let dirs = try? fm.contentsOfDirectory(at: root, includingPropertiesForKeys: nil) else { return nil }
+    var found: [(url: URL, date: Date)] = []
+    for dir in dirs where (try? dir.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true {
+        guard let files = try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: [.contentModificationDateKey]) else { return nil }
+        for f in files where f.pathExtension == "jsonl" && cleanArg(f.deletingPathExtension().lastPathComponent) != nil {
             found.append((f, (try? f.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast))
         }
     }
-    return found.sorted { $0.1 > $1.1 }.compactMap { url, date in
-        guard let h = try? FileHandle(forReadingFrom: url) else { return nil }
-        defer { try? h.close() }
-        let events = lines(((try? h.read(upToCount: 256_000)) ?? nil) ?? Data())
-        guard let first = events.first(where: { $0["type"] as? String == "user" && $0["isSidechain"] as? Bool != true && !visibleText(($0["message"] as? [String: Any])?["content"]).isEmpty }) else { return nil }
-        let custom = events.last(where: { $0["type"] as? String == "custom-title" })?["customTitle"] as? String
-        let title = custom ?? visibleText((first["message"] as? [String: Any])?["content"])
-        return LocalSession(id: url.deletingPathExtension().lastPathComponent, title: String(title.prefix(60)), cwd: first["cwd"] as? String ?? "", updated: date, path: url.path)
+    return found.sorted { $0.date > $1.date }
+}
+
+/// 앞부분만 읽어 큰 기록에서도 빠르게 동작한다.
+func readSession(_ url: URL, _ date: Date) -> LocalSession? {
+    guard let h = try? FileHandle(forReadingFrom: url) else { return nil }
+    defer { try? h.close() }
+    let events = lines(((try? h.read(upToCount: 256_000)) ?? nil) ?? Data())
+    guard let first = events.first(where: { $0["type"] as? String == "user" && $0["isSidechain"] as? Bool != true && !visibleText(($0["message"] as? [String: Any])?["content"]).isEmpty }) else { return nil }
+    let custom = events.last(where: { $0["type"] as? String == "custom-title" })?["customTitle"] as? String
+    let title = custom ?? visibleText((first["message"] as? [String: Any])?["content"])
+    return LocalSession(id: url.deletingPathExtension().lastPathComponent, title: String(title.prefix(60)), cwd: first["cwd"] as? String ?? "", updated: date, path: url.path)
+}
+
+func sessionFolder(_ id: String, config: String?) -> String? {
+    sessionFiles(config)?.first { $0.url.deletingPathExtension().lastPathComponent == id }.flatMap { readSession($0.url, $0.date)?.cwd }
+}
+
+/// 바뀐 세션만 올리고, Claude에서 지워진 세션은 서버에서도 지운다.
+func syncSessions(_ c: Client, config: String?, sent: inout [String: Date], kept: inout [String]?) async -> Bool {
+    guard let files = sessionFiles(config) else { return true }
+    var ok = true
+    for f in files where sent[f.url.path] != f.date {
+        guard let s = readSession(f.url, f.date) else { sent[f.url.path] = f.date; continue }
+        if await uploadSession(s, client: c) { sent[f.url.path] = f.date } else { ok = false }
     }
+    let ids = files.map { $0.url.deletingPathExtension().lastPathComponent }.sorted()
+    if ok, ids != kept {
+        if (try? await c.call("POST", "/api/worker/sessions", ["shared": true, "sessions": [], "keep": ids]))?.0 == 200 { kept = ids } else { ok = false }
+    }
+    return ok
 }
 
 func uploadSession(_ s: LocalSession, client: Client) async -> Bool {
@@ -348,7 +388,7 @@ func uploadSession(_ s: LocalSession, client: Client) async -> Bool {
         let file = (try? Data(contentsOf: URL(fileURLWithPath: path))).map { String(decoding: $0, as: UTF8.self) }
         return (file ?? written[path]).map { ["title": title, "html": $0] }
     }
-    let body: [String: Any] = ["sessions": [["id": s.id, "title": s.title, "folder": s.cwd, "project": s.project, "updated": s.updated.timeIntervalSince1970 * 1000, "turns": Array(turns.suffix(300)), "artifacts": artifacts]]]
+    let body: [String: Any] = ["shared": true, "sessions": [["id": s.id, "title": s.title, "folder": s.cwd, "project": s.project, "updated": s.updated.timeIntervalSince1970 * 1000, "turns": Array(turns.suffix(2000)), "artifacts": artifacts]]]
     return (try? await client.call("POST", "/api/worker/sessions", body))?.0 == 200
 }
 

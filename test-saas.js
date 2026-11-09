@@ -4,7 +4,7 @@ const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'clauduo-saas-'));
 const bin = path.join(tmp, 'claude');
 fs.writeFileSync(bin, `#!/bin/sh
 cat >/dev/null
-echo "cfg=$CLAUDE_CONFIG_DIR args=$*" >> "${tmp}/cfg.log"
+echo "cfg=$CLAUDE_CONFIG_DIR pwd=$PWD args=$*" >> "${tmp}/cfg.log"
 mkdir -p work
 echo from-worker > work/made.txt
 ln -s /etc/passwd work/link
@@ -52,11 +52,13 @@ const mock = http.createServer(async (req, res) => {
     await sleep(1000);
     const client = () => {
       let cookie = '';
-      return async (method, p, body) => {
+      const c = async (method, p, body) => {
         const r = await fetch(U + p, { method, headers: { 'content-type': 'application/json', cookie }, body: method === 'GET' ? undefined : JSON.stringify(body || {}) });
         const sc = r.headers.get('set-cookie'); if (sc) cookie = sc.split(';')[0];
         return { s: r.status, j: await r.json() };
       };
+      c.raw = (p, headers = {}) => fetch(U + p, { headers: { cookie, ...headers } });
+      return c;
     };
     const login = async (c, email, invite) => {
       assert.equal((await c('POST', '/api/auth/request', { email, invite })).s, 200);
@@ -123,6 +125,19 @@ const mock = http.createServer(async (req, res) => {
     assert.equal((await A('PUT', W('/file'), { path: 'up/dir/a.png', data: png, upload: true })).s, 200, 'upload overwrites');
     assert.equal((await A('GET', W('/file?path=up/dir/a.png'))).j.text, null, 'stored as binary');
     assert.equal((await A('PUT', W('/file'), { path: '.claude/x', data: png, upload: true })).s, 400, 'blocked path');
+    assert.equal((await A('GET', W('/file?path=up/dir/a.png'))).j.kind, 'image', 'media kind');
+    const raw = await A.raw(W('/raw?path=up/dir/a.png'));
+    assert.equal(raw.headers.get('content-type'), 'image/png', 'raw type'); assert.match(raw.headers.get('content-security-policy'), /^sandbox;/, 'raw sandboxed');
+    assert.deepEqual([...new Uint8Array(await raw.arrayBuffer())], [137, 80, 78, 71, 0, 1, 2, 255], 'raw bytes');
+    const part = await A.raw(W('/raw?path=up/dir/a.png'), { range: 'bytes=2-3' });
+    assert.equal(part.status, 206, 'range'); assert.equal(part.headers.get('content-range'), 'bytes 2-3/8'); assert.deepEqual([...new Uint8Array(await part.arrayBuffer())], [78, 71], 'range bytes');
+    assert.equal((await A.raw(W('/raw?path=up/dir/a.png'), { range: 'bytes=99-' })).status, 416, 'bad range');
+    assert.equal((await C.raw(W('/raw?path=up/dir/a.png'))).status, 404, 'raw isolated');
+    await A('PUT', W('/file'), { path: 'run.sh', data: png, upload: true }); assert.equal((await A.raw(W('/raw?path=run.sh'))).status, 404, 'only media served raw');
+    await A('PUT', W('/file'), { path: 'euc.txt', data: Buffer.from([0xc7, 0xd1, 0xb1, 0xdb]).toString('base64'), upload: true });
+    assert.equal((await A('GET', W('/file?path=euc.txt'))).j.text, '한글', 'euc-kr decoded');
+    await A('PUT', W('/file'), { path: 'u16.txt', data: Buffer.from('\ufeffhi', 'utf16le').toString('base64'), upload: true });
+    assert.equal((await A('GET', W('/file?path=u16.txt'))).j.text, 'hi', 'utf-16 decoded');
     assert.equal((await A('PUT', W('/file'), { path: 'big.bin', data: Buffer.alloc(2e6).toString('base64'), upload: true })).s, 413, 'file limit');
     await A('POST', W('/upload-done'), { count: 1 });
     const upMsgs = (await A('GET', W('/state'))).j.messages.slice(before);
@@ -185,6 +200,11 @@ const mock = http.createServer(async (req, res) => {
       let bt = [];
       for (let i = 0; i < 60 && bt.length < 2; i++) { bt = (await B('GET', W('/threads/' + bp.j.id))).j.turns; await sleep(250); }
       assert(bt[1].role === 'error' && bt[1].text.includes('전체 권한'), 'bypass needs Mac opt-in');
+      const ef = await B('POST', W('/threads'), { text: 'x', agentId: wkId, folder: proj, effort: 'high' });
+      let et = [];
+      for (let i = 0; i < 60 && et.length < 2; i++) { et = (await B('GET', W('/threads/' + ef.j.id))).j.turns; await sleep(250); }
+      assert(fs.readFileSync(path.join(tmp, 'cfg.log'), 'utf8').includes('--effort high'), 'effort reaches claude');
+      assert.equal((await B('GET', W('/threads/' + (await B('POST', W('/threads'), { text: 'x', agentId: wkId, folder: proj, effort: 'nope' })).j.id))).j.effort, null, 'bad effort dropped');
       const sid = '11111111-2222-3333-4444-555555555555', imp = path.join(tmp, 'imp/projects/-p');
       fs.mkdirSync(imp, { recursive: true });
       const u = (type, content, extra = {}) => JSON.stringify({ type, cwd: proj, sessionId: sid, message: { content }, ...extra });
@@ -202,7 +222,10 @@ const mock = http.createServer(async (req, res) => {
       ].join('\n') + '\n');
       const wtSid = '99999999-2222-3333-4444-555555555555';
       fs.writeFileSync(path.join(imp, wtSid + '.jsonl'), JSON.stringify({ type: 'user', cwd: proj + '/.claude/worktrees/wt', sessionId: wtSid, message: { content: '워크트리 작업' } }) + '\n');
-      require('child_process').execFileSync(process.env.MAC_BIN, ['--import', U, token, path.join(tmp, 'imp')], { env, stdio: 'ignore' });
+      await fetch(U + '/api/worker/sessions', { method: 'POST', headers: { authorization: 'Bearer ' + token, 'content-type': 'application/json' }, body: JSON.stringify({ sessions: [{ id: 'old-consent', title: '이전 동의', folder: proj, turns: [{ role: 'user', text: '비공개' }] }] }) });
+      assert.equal((await A('GET', W('/threads/imp-old-consent'))).s, 404, 'session under old consent stays private');
+      assert(!(await A('GET', W('/state'))).j.threads.some(t => t.id === 'imp-old-consent'), 'old consent hidden from list');
+      require('child_process').execFileSync(process.env.MAC_BIN, ['--sync', U, token, path.join(tmp, 'imp')], { env, stdio: 'ignore' });
       const impId = 'imp-' + sid, it = (await B('GET', W('/threads/' + impId))).j;
       assert.equal(it.turns.length, 2, 'import filters hidden events');
       const impList = (await B('GET', W('/state'))).j.threads;
@@ -211,21 +234,59 @@ const mock = http.createServer(async (req, res) => {
       const ra = (await B('GET', W('/artifacts'))).j.find(a => a.title === '복원 아티팩트');
       assert(ra, 'published artifact restored from session'); assert.equal((await B('GET', W('/artifacts/' + ra.id))).j.html, '<p>restored</p>', 'artifact content from transcript');
       assert(!(await B('GET', W('/artifacts'))).j.some(a => a.title === 'unpublished'), 'unpublished html not imported');
-      assert(!(await A('GET', W('/artifacts'))).j.some(a => a.title === '복원 아티팩트'), 'restored artifact private');
-      assert.equal((await A('GET', W('/artifacts/' + ra.id))).s, 404, 'restored artifact blocked for teammates');
+      assert((await A('GET', W('/artifacts'))).j.some(a => a.title === '복원 아티팩트'), 'restored artifact shared');
+      assert.equal((await A('GET', W('/artifacts/' + ra.id))).s, 200, 'restored artifact open to teammates');
       assert.equal(it.turns[0].text, '가져올 첫 질문'); assert.equal(it.turns[1].text, '답변 일부');
       assert(it.turns[1].tools.some(x => x.includes('Bash: pwd')), 'import tools');
       assert((await B('GET', W('/state'))).j.threads.find(t => t.id === impId).title === '내 세션 제목', 'import title');
-      assert.equal((await A('GET', W('/threads/' + impId))).s, 404, 'imported session is private');
-      assert(!(await A('GET', W('/state'))).j.threads.some(t => t.id === impId), 'hidden from teammates');
-      assert.equal((await A('GET', W('/search?q=') + encodeURIComponent('가져올'))).j.length, 0, 'hidden from search');
+      assert.equal((await A('GET', W('/threads/' + impId))).j.turns.length, 2, 'synced session visible to workspace');
+      assert((await A('GET', W('/state'))).j.threads.some(t => t.id === impId), 'listed for teammates');
+      assert.equal((await A('POST', W('/threads/' + impId + '/messages'), { text: 'x' })).s, 403, 'teammate cannot drive my session');
+      assert.equal((await C('GET', W('/threads/' + impId))).s, 404, 'other workspace still blocked');
+      assert.equal((await A('GET', W('/search?q=') + encodeURIComponent('가져올'))).j.length, 1, 'found in search');
       assert.equal((await B('POST', W('/threads/' + impId + '/messages'), { text: '이어서' })).s, 200);
       for (let i = 0; i < 60 && it.turns.length < 4; i++) { Object.assign(it, (await B('GET', W('/threads/' + impId))).j); await sleep(250); }
       assert(fs.readFileSync(path.join(tmp, 'cfg.log'), 'utf8').includes('--resume ' + sid), 'imported session resumes');
+      fs.unlinkSync(path.join(imp, wtSid + '.jsonl'));
+      require('child_process').execFileSync(process.env.MAC_BIN, ['--sync', U, token, path.join(tmp, 'imp')], { env, stdio: 'ignore' });
+      const synced = (await B('GET', W('/state'))).j.threads;
+      assert(!synced.some(t => t.id === 'imp-' + wtSid), 'session deleted in Claude disappears');
+      assert(synced.some(t => t.id === impId), 'existing session stays');
+      wrk.kill(); await sleep(500); // 허용 폴더가 없어도 Claude에 있는 세션은 이어가고, 없는 세션은 거부한다
+      wrk = spawn(process.env.MAC_BIN, ['--worker', U, token], { env: { ...env, CLAUDUO_CONFIG_DIR: path.join(tmp, 'imp') }, cwd: tmp });
+      const resumes = () => fs.readFileSync(path.join(tmp, 'cfg.log'), 'utf8').split('--resume ' + sid).length;
+      const before = resumes();
+      assert.equal((await B('POST', W('/threads/' + impId + '/messages'), { text: '폴더 허용 없이' })).s, 200);
+      for (let i = 0; i < 60 && resumes() === before; i++) await sleep(250);
+      assert.equal(resumes(), before + 1, 'synced session runs without folder grant');
+      for (let i = 0; i < 40 && (await B('GET', W('/state'))).j.threads.find(t => t.id === impId).busy; i++) await sleep(250);
+      assert.equal((await B('POST', W('/threads/' + made.j.id + '/messages'), { text: '거부' })).s, 200);
+      let denied = []; for (let i = 0; i < 60 && denied.at(-1)?.role !== 'error'; i++) { denied = (await B('GET', W('/threads/' + made.j.id))).j.turns; await sleep(250); }
+      assert(denied.at(-1).text.includes('허용하지 않은'), 'unknown session still needs folder grant');
 
       await A('POST', W('/messages'), { text: '@wk 다시 만들어' });
       for (let i = 0; i < 40; i++) { if ((await A('GET', W('/state'))).j.messages.filter(m => m.text === 'worker-done').length >= 2) break; await sleep(250); }
       assert((await A('GET', W('/state'))).j.messages.filter(m => m.text === 'worker-done').length >= 2, 'mac room job');
+      await B('POST', W('/messages'), { text: '@wk 내 맥 확인' });
+      const homeRun = () => fs.readFileSync(path.join(tmp, 'cfg.log'), 'utf8').split('\n').some(l => l.includes('pwd=' + require('os').userInfo().homedir + ' ') && l.includes('stream-json') && !l.includes('--tools') && !l.includes('--append-system-prompt'));
+      for (let i = 0; i < 60 && !homeRun(); i++) await sleep(250);
+      assert(homeRun(), 'owner mention runs full Claude from home');
+      wrk.kill(); await sleep(500);
+      const pull = async () => (await fetch(U + '/api/worker/job?caps=local', { headers: { authorization: 'Bearer ' + token } })).json();
+      const finish = id => fetch(U + '/api/worker/job', { method: 'POST', headers: { authorization: 'Bearer ' + token, 'content-type': 'application/json' }, body: JSON.stringify({ id, reply: 'ok', changes: [] }) });
+      for (let j; (j = await pull()).id;) await finish(j.id); // 앞선 작업 비우기
+      await A('POST', W('/messages'), { text: '@wk 팀원-비밀지시' });
+      await B('POST', W('/messages'), { text: '@wk 주인-요청' });
+      const j1 = await pull(); assert(!j1.local && !j1.room && j1.files, 'teammate mention stays sandboxed'); await finish(j1.id);
+      const j2m = await pull(); assert(j2m.room && j2m.prompt.includes('주인-요청'), 'owner mention reaches Mac');
+      assert(!j2m.prompt.includes('팀원-비밀지시') && j2m.instructions === undefined, 'owner run excludes teammate text');
+      await fetch(U + '/api/worker/progress', { method: 'POST', headers: { authorization: 'Bearer ' + token, 'content-type': 'application/json' }, body: JSON.stringify({ id: j2m.id, text: '확인 중', tools: ['Read: /Users/me/secret'] }) });
+      const wB = (await B('GET', W(`/agents/${wkId}/work`))).j, wA = (await A('GET', W(`/agents/${wkId}/work`))).j;
+      assert(wB.some(x => x.status === 'running' && x.tools[0].includes('secret') && x.text === '확인 중'), 'owner sees live work');
+      assert(wA.some(x => x.status === 'running' && x.tools[0].includes('secret')), 'teammate sees live work after consent');
+      assert(wB.some(x => x.status === 'active' && x.id === impId), 'recent Claude session listed'); assert(wA.some(x => x.id === impId), 'recent session live for teammates');
+      await finish(j2m.id);
+      wrk = spawn(process.env.MAC_BIN, ['--worker', U, token], { env: { ...env, CLAUDUO_CONFIG_DIR: '/acct-a', CLAUDUO_FOLDERS: proj }, cwd: tmp });
     }
 
     // 동시 수정 충돌과 되돌리기
@@ -270,6 +331,9 @@ const mock = http.createServer(async (req, res) => {
     const sh = (await A('GET', W('/artifacts'))).j.find(a => a.title === 'site/page.html');
     assert(sh && sh.source === 'cloud', 'shared html listed');
     assert.equal((await A('GET', W('/artifacts/' + encodeURIComponent(sh.id)))).j.html, '<p>shared</p>', 'shared html opens'); assert.equal((await A('GET', W('/artifacts/' + art.id))).j.html, '<p>x</p>');
+    const page = await A.raw(W('/artifacts/' + encodeURIComponent(sh.id) + '/view'));
+    assert.equal(await page.text(), '<p>shared</p>', 'artifact page'); assert.match(page.headers.get('content-type'), /^text\/html/); assert.match(page.headers.get('content-security-policy'), /^sandbox allow-scripts;.*default-src \*/, 'artifact page sandboxed, external sources open');
+    assert.equal((await C.raw(W('/artifacts/' + art.id + '/view'))).status, 404, 'artifact page isolated');
     assert.equal((await C('GET', W('/artifacts'))).s, 404, 'artifacts isolated');
     assert.equal((await A('GET', W('/search?q=') + encodeURIComponent('클라우드'))).j[0].id, ct, 'search');
     assert.equal((await A('GET', W('/search?q=%25'))).j.length, 0, 'search escapes wildcards');

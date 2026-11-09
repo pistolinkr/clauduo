@@ -12,6 +12,33 @@ const NAME = /^[\w가-힣-]{1,30}$/, RESERVED = new Set(['all', '모두', 'syste
 const sha = b => createHash('sha256').update(b).digest('hex');
 const rand = () => randomBytes(32).toString('base64url');
 const validName = n => NAME.test(n || '') && !RESERVED.has(n);
+// 브라우저가 직접 그릴 수 있는 형식만 허용한다. 실제 재생 가능 여부는 코덱에 달려 있어 화면에서 실패를 처리한다.
+const MEDIA = Object.entries({
+  image: { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp', avif: 'image/avif', bmp: 'image/bmp', ico: 'image/x-icon', svg: 'image/svg+xml', heic: 'image/heic', heif: 'image/heif', tif: 'image/tiff', tiff: 'image/tiff' },
+  video: { mp4: 'video/mp4', m4v: 'video/x-m4v', webm: 'video/webm', mov: 'video/quicktime', ogv: 'video/ogg' },
+  audio: { mp3: 'audio/mpeg', m4a: 'audio/mp4', aac: 'audio/aac', wav: 'audio/wav', ogg: 'audio/ogg', oga: 'audio/ogg', opus: 'audio/ogg', flac: 'audio/flac' },
+  pdf: { pdf: 'application/pdf' },
+}).reduce((all, [kind, types]) => { for (const [ext, type] of Object.entries(types)) all[ext] = { kind, type }; return all; }, {});
+const mediaOf = p => MEDIA[p.split('.').pop().toLowerCase()];
+// 아티팩트는 앱과 다른 불투명 출처에서 돌아가므로 앱 쿠키에 닿지 못한다. 외부 이미지·폰트·미디어·CDN만 연다.
+const ARTIFACT_CSP = "sandbox allow-scripts; default-src * data: blob: 'unsafe-inline' 'unsafe-eval'; frame-ancestors 'self'";
+const artifactPage = html => new Response(html, { headers: { 'content-type': 'text/html; charset=utf-8', 'content-security-policy': ARTIFACT_CSP, 'referrer-policy': 'no-referrer', 'cache-control': 'no-store' } });
+// BOM → UTF-8 → EUC-KR 순서로 읽는다. 어느 쪽도 아니면 바이너리(null).
+function decodeText(b) {
+  const bom = b[0] === 0xff && b[1] === 0xfe ? 'utf-16le' : b[0] === 0xfe && b[1] === 0xff ? 'utf-16be' : null;
+  if (!bom && b.includes(0)) return null;
+  for (const enc of bom ? [bom] : ['utf-8', 'euc-kr']) try { return new TextDecoder(enc, { fatal: true }).decode(b); } catch {}
+  return null;
+}
+// Safari(맥 앱 WKWebView)는 Range 응답이 없으면 동영상을 재생하지 않는다.
+function serveMedia(b, { kind, type }, rangeHeader) {
+  const headers = { 'content-type': type, 'accept-ranges': 'bytes', 'cache-control': 'private, no-cache', 'content-security-policy': kind === 'pdf' ? "default-src 'none'; frame-ancestors 'self'" : "sandbox; default-src 'none'; style-src 'unsafe-inline'; img-src data:; frame-ancestors 'self'" };
+  const r = /^bytes=(\d*)-(\d*)$/.exec(rangeHeader || '');
+  if (!r || (!r[1] && !r[2])) return new Response(b, { headers });
+  const start = r[1] ? +r[1] : Math.max(0, b.length - +r[2]), end = r[1] && r[2] ? Math.min(+r[2], b.length - 1) : b.length - 1;
+  if (start > end || start >= b.length) return new Response(null, { status: 416, headers: { 'content-range': `bytes */${b.length}` } });
+  return new Response(b.subarray(start, end + 1), { status: 206, headers: { ...headers, 'content-range': `bytes ${start}-${end}/${b.length}` } });
+}
 const json = (status, body, headers = {}) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json', 'cache-control': 'no-store', ...headers } });
 const secretKey = env => { if (!env.CLAUDUO_SECRET) throw new Error('CLAUDUO_SECRET is required'); return createHash('sha256').update(env.CLAUDUO_SECRET).digest(); };
 
@@ -75,6 +102,9 @@ function apiErrorText(e) {
 }
 
 // ---- 워크스페이스 하나 = Durable Object 하나. 요청이 직렬화되어 작업 배정에 경쟁 조건이 없다. ----
+// 공유 동의(동의 v3)를 한 기기의 세션만 워크스페이스에 공개한다. 이전 동의로 올린 세션은 본인에게만 보인다.
+const SHARED_AGENTS = '(SELECT id FROM agents WHERE shared=1)';
+
 export class Workspace extends DurableObject {
   constructor(ctx, env) {
     super(ctx, env);
@@ -93,7 +123,7 @@ export class Workspace extends DurableObject {
       CREATE TABLE IF NOT EXISTS thread_messages (id INTEGER PRIMARY KEY AUTOINCREMENT, thread_id TEXT NOT NULL, role TEXT NOT NULL, text TEXT NOT NULL, files TEXT NOT NULL DEFAULT '[]', created_at INTEGER NOT NULL);
       CREATE INDEX IF NOT EXISTS thread_messages_t ON thread_messages (thread_id, id);
     `);
-    for (const q of ['ALTER TABLE jobs ADD COLUMN thread_id TEXT', 'ALTER TABLE agents ADD COLUMN folders TEXT', 'ALTER TABLE jobs ADD COLUMN progress TEXT', 'ALTER TABLE jobs ADD COLUMN cancel INTEGER', 'ALTER TABLE threads ADD COLUMN session_id TEXT', 'ALTER TABLE threads ADD COLUMN model TEXT', 'ALTER TABLE threads ADD COLUMN mode TEXT', `ALTER TABLE thread_messages ADD COLUMN tools TEXT NOT NULL DEFAULT '[]'`, `ALTER TABLE threads ADD COLUMN kind TEXT NOT NULL DEFAULT 'code'`, `ALTER TABLE artifacts ADD COLUMN source TEXT NOT NULL DEFAULT 'cloud'`, 'ALTER TABLE threads ADD COLUMN imported INTEGER NOT NULL DEFAULT 0', 'ALTER TABLE artifacts ADD COLUMN owner TEXT', 'ALTER TABLE threads ADD COLUMN project TEXT']) { try { this.sql.exec(q); if (q.includes('artifacts ADD COLUMN source')) this.sql.exec(`UPDATE artifacts SET source='local' WHERE thread_id IN (SELECT id FROM threads WHERE env='local')`); } catch {} } // 이미 있으면 무시
+    for (const q of ['ALTER TABLE jobs ADD COLUMN thread_id TEXT', 'ALTER TABLE agents ADD COLUMN folders TEXT', 'ALTER TABLE jobs ADD COLUMN progress TEXT', 'ALTER TABLE jobs ADD COLUMN cancel INTEGER', 'ALTER TABLE threads ADD COLUMN session_id TEXT', 'ALTER TABLE threads ADD COLUMN model TEXT', 'ALTER TABLE threads ADD COLUMN mode TEXT', 'ALTER TABLE threads ADD COLUMN effort TEXT', `ALTER TABLE thread_messages ADD COLUMN tools TEXT NOT NULL DEFAULT '[]'`, `ALTER TABLE threads ADD COLUMN kind TEXT NOT NULL DEFAULT 'code'`, `ALTER TABLE artifacts ADD COLUMN source TEXT NOT NULL DEFAULT 'cloud'`, 'ALTER TABLE threads ADD COLUMN imported INTEGER NOT NULL DEFAULT 0', 'ALTER TABLE artifacts ADD COLUMN owner TEXT', 'ALTER TABLE threads ADD COLUMN project TEXT', 'ALTER TABLE jobs ADD COLUMN direct_text TEXT', 'ALTER TABLE agents ADD COLUMN shared INTEGER NOT NULL DEFAULT 0']) { try { this.sql.exec(q); if (q.includes('artifacts ADD COLUMN source')) this.sql.exec(`UPDATE artifacts SET source='local' WHERE thread_id IN (SELECT id FROM threads WHERE env='local')`); } catch {} } // 이미 있으면 무시
   }
   all(q, ...p) { return this.sql.exec(q, ...p).toArray(); }
   one(q, ...p) { return this.all(q, ...p)[0]; }
@@ -120,12 +150,13 @@ export class Workspace extends DurableObject {
     if (!quiet) this.post(by, `${rel} ${buf ? (cur ? '수정' : '생성') : '삭제'}`, 'change', histId); // 일괄 업로드는 마지막에 한 줄로 알린다
   }
 
-  mentions(from, text, depth) {
+  mentions(from, text, depth, userId = null) {
     if (depth > MAX_CHAIN) return this.post('system', `대화 연쇄가 ${MAX_CHAIN}번을 넘어 멈췄어요. 이어가려면 다시 멘션해 주세요.`);
     const all = /@(all|모두)(?![\w가-힣-])/.test(text);
-    for (const a of this.all('SELECT id, name, mode FROM agents WHERE name<>?', from)) {
+    for (const a of this.all('SELECT id, name, mode, created_by FROM agents WHERE name<>?', from)) {
       if (!(all ? this.online(a) : new RegExp(`@${a.name}(?![\\w가-힣-])`).test(text))) continue;
-      if (!this.one(`SELECT 1 AS x FROM jobs WHERE agent_id=? AND status='queued'`, a.id)) this.sql.exec('INSERT INTO jobs (agent_id, depth) VALUES (?,?)', a.id, depth);
+      if (userId && a.mode === 'worker' && a.created_by === userId) { this.sql.exec('INSERT INTO jobs (agent_id, depth, direct_text) VALUES (?,?,?)', a.id, depth, text); continue; } // 내 Claude를 내가 직접 부른 경우만 내 Mac에서 실행한다
+      if (!this.one(`SELECT 1 AS x FROM jobs WHERE agent_id=? AND status='queued' AND direct_text IS NULL`, a.id)) this.sql.exec('INSERT INTO jobs (agent_id, depth) VALUES (?,?)', a.id, depth);
     }
     this.kick();
   }
@@ -139,9 +170,9 @@ export class Workspace extends DurableObject {
 
   instructions() { return this.one(`SELECT value FROM meta WHERE key='instructions'`)?.value || ''; }
 
-  startThread({ text, agent, folder, kind, model, mode, userId, author }) {
+  startThread({ text, agent, folder, kind, model, mode, effort = null, userId, author }) {
     const id = randomUUID();
-    this.sql.exec('INSERT INTO threads (id, title, env, agent_id, agent, folder, created_by, author, updated_at, model, mode, kind) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)', id, text.slice(0, 60), agent.mode === 'api' ? 'cloud' : 'local', agent.id, agent.name, folder, userId, author, Date.now(), agent.mode === 'api' ? null : model, agent.mode === 'api' ? null : mode, kind);
+    this.sql.exec('INSERT INTO threads (id, title, env, agent_id, agent, folder, created_by, author, updated_at, model, mode, kind, effort) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)', id, text.slice(0, 60), agent.mode === 'api' ? 'cloud' : 'local', agent.id, agent.name, folder, userId, author, Date.now(), agent.mode === 'api' ? null : model, agent.mode === 'api' ? null : mode, kind, agent.mode === 'api' ? null : effort);
     this.addTurn(id, 'user', text);
     this.sql.exec('INSERT INTO jobs (agent_id, depth, thread_id) VALUES (?,0,?)', agent.id, id);
     return id;
@@ -183,6 +214,8 @@ export class Workspace extends DurableObject {
   }
 
   async snapshot(job, agent) {
+    // 팀원의 글이 내 Mac에 지시로 들어가지 않게 대화 기록과 워크스페이스 지침은 넣지 않는다
+    if (job.direct_text) return { room: true, prompt: `너는 팀 대화방 Clauduo의 "${agent.name}"야. 이 요청은 이 Mac의 주인이 직접 보낸 거야. 이 Mac의 프로젝트와 Claude 기록을 확인해서 답해. 답변은 팀원 모두가 보는 방에 올라가니 짧게 쓰고, 비밀 정보는 쓰지 마.\n\n${job.direct_text}` };
     const thread = job.thread_id && this.one('SELECT * FROM threads WHERE id=?', job.thread_id);
     if (thread?.env === 'local') return { thread, prompt: this.threadPrompt(thread) };
     if (thread?.kind === 'chat') return { thread, files: [], prompt: this.threadPrompt(thread) }; // 실제 폴더에서 실행하므로 공유 파일 사본이 필요 없다
@@ -320,10 +353,11 @@ ${log.map(m => m.kind === 'change' ? `[변경] ${m.author}: ${m.text}` : `${m.au
       if (!agent) return json(401, { error: '인증 실패' });
       this.seen.set(agent.id, Date.now());
       if (m === 'GET') {
-        const job = this.claim('a.id=? AND (j.thread_id IS NULL OR ?=1)', agent.id, u.searchParams.get('caps') === 'local' ? 1 : 0);
+        const job = this.claim('a.id=? AND ((j.thread_id IS NULL AND j.direct_text IS NULL) OR ?=1)', agent.id, u.searchParams.get('caps') === 'local' ? 1 : 0);
         if (!job) return json(200, {});
-        const { files, prompt, thread } = await this.snapshot(job, agent);
-        if (thread?.env === 'local') return json(200, { id: job.id, prompt, folder: thread.folder, chat: thread.kind === 'chat', local: true, session: thread.session_id, model: thread.model, mode: thread.mode, instructions: this.instructions() });
+        const { files, prompt, thread, room } = await this.snapshot(job, agent);
+        if (room) return json(200, { id: job.id, prompt, local: true, chat: true, room: true });
+        if (thread?.env === 'local') return json(200, { id: job.id, prompt, folder: thread.folder, chat: thread.kind === 'chat', local: true, session: thread.session_id, model: thread.model, mode: thread.mode, effort: thread.effort, instructions: this.instructions() });
         return json(200, { id: job.id, prompt, files: Object.fromEntries(files.map(f => [f.path, f.data.toString('base64')])) });
       }
       const job = Number.isInteger(body.id) && this.one('SELECT * FROM jobs WHERE id=? AND agent_id=?', body.id, agent.id);
@@ -347,20 +381,29 @@ ${log.map(m => m.kind === 'change' ? `[변경] ${m.author}: ${m.text}` : `${m.au
       const token = (req.headers.get('authorization') || '').replace('Bearer ', '');
       const agent = token && this.one(`SELECT * FROM agents WHERE token_hash=? AND mode='worker'`, sha(token));
       if (!agent) return json(401, { error: '인증 실패' });
+      if (body.shared === true) this.sql.exec('UPDATE agents SET shared=1 WHERE id=?', agent.id);
       for (const s of (Array.isArray(body.sessions) ? body.sessions : []).slice(0, 20)) {
         if (typeof s?.id !== 'string' || !/^[\w-]{1,100}$/.test(s.id) || !Array.isArray(s.turns)) continue;
-        const id = `imp-${s.id}`, cur = this.one('SELECT created_by FROM threads WHERE id=?', id);
+        const id = `imp-${s.id}`, cur = this.one('SELECT created_by, model, mode FROM threads WHERE id=?', id);
         if (cur && cur.created_by !== agent.created_by) continue;
         const at = Number(s.updated) || Date.now(), folder = String(s.folder || '').slice(0, 500) || null;
         this.ctx.storage.transactionSync(() => {
           this.sql.exec('DELETE FROM thread_messages WHERE thread_id=?', id);
-          this.sql.exec('INSERT OR REPLACE INTO threads (id, title, env, agent_id, agent, folder, created_by, author, updated_at, mode, kind, session_id, imported, project) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,1,?)', id, String(s.title || '가져온 세션').slice(0, 60), 'local', agent.id, agent.name, folder, agent.created_by, agent.name, at, 'auto', 'code', s.id, String(s.project || '').slice(0, 120) || null);
-          for (const t of s.turns.slice(-300)) {
+          this.sql.exec('INSERT OR REPLACE INTO threads (id, title, env, agent_id, agent, folder, created_by, author, updated_at, model, mode, kind, session_id, imported, project) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,1,?)', id, String(s.title || '가져온 세션').slice(0, 60), 'local', agent.id, agent.name, folder, agent.created_by, agent.name, at, cur?.model ?? null, cur?.mode ?? 'auto', 'code', s.id, String(s.project || '').slice(0, 120) || null);
+          for (const t of s.turns.slice(-2000)) {
             const tools = (Array.isArray(t?.tools) ? t.tools : []).slice(0, 300).map(x => String(x).slice(0, 300));
-            this.sql.exec('INSERT INTO thread_messages (thread_id, role, text, files, tools, created_at) VALUES (?,?,?,?,?,?)', id, t?.role === 'user' ? 'user' : 'assistant', String(t?.text ?? '').slice(0, 20000), '[]', JSON.stringify(tools), at);
+            this.sql.exec('INSERT INTO thread_messages (thread_id, role, text, files, tools, created_at) VALUES (?,?,?,?,?,?)', id, t?.role === 'user' ? 'user' : 'assistant', String(t?.text ?? '').slice(0, 50000), '[]', JSON.stringify(tools), at);
           }
         });
         this.saveArtifacts(s.artifacts, id, agent.name, 'local', agent.created_by); // 세션과 마찬가지로 본인에게만 보인다
+      }
+      if (Array.isArray(body.keep)) { // Claude에서 지워진 세션은 여기서도 지운다
+        const keep = new Set(body.keep.map(String));
+        for (const t of this.all('SELECT id, session_id FROM threads WHERE imported=1 AND agent_id=? AND id NOT IN (SELECT thread_id FROM jobs WHERE thread_id IS NOT NULL)', agent.id)) {
+          if (keep.has(t.session_id)) continue;
+          this.sql.exec('DELETE FROM thread_messages WHERE thread_id=?', t.id);
+          this.sql.exec('DELETE FROM threads WHERE id=?', t.id);
+        }
       }
       return json(200, {});
     }
@@ -394,7 +437,7 @@ ${log.map(m => m.kind === 'change' ? `[변경] ${m.author}: ${m.text}` : `${m.au
       const jobs = this.all('SELECT a.name, j.status FROM jobs j JOIN agents a ON a.id=j.agent_id ORDER BY j.id');
       return json(200, {
         agents: this.all('SELECT id, name, mode, created_by, folders FROM agents ORDER BY name').map(a => ({ id: a.id, name: a.name, mode: a.mode, online: this.online(a), mine: a.created_by === me.userId, removable: owner || a.created_by === me.userId, folders: a.created_by === me.userId ? JSON.parse(a.folders || '[]') : [] })),
-        threads: this.all(`SELECT t.id, t.title, t.env, t.kind, t.project, t.agent, t.folder, t.author, t.updated_at, t.created_by, (SELECT 1 FROM jobs j WHERE j.thread_id=t.id LIMIT 1) AS busy FROM threads t WHERE t.imported=0 OR t.created_by=? ORDER BY t.updated_at DESC LIMIT 500`, me.userId).map(({ created_by, ...t }) => ({ ...t, project: t.project || (t.folder && t.folder.split('/').pop()) || null, folder: t.folder && t.folder.split('/').pop(), busy: !!t.busy, mine: created_by === me.userId })),
+        threads: this.all(`SELECT t.id, t.title, t.env, t.kind, t.project, t.agent, t.folder, t.author, t.updated_at, t.created_by, (SELECT 1 FROM jobs j WHERE j.thread_id=t.id LIMIT 1) AS busy FROM threads t WHERE t.imported=0 OR t.created_by=? OR t.agent_id IN ${SHARED_AGENTS} ORDER BY t.updated_at DESC LIMIT 500`, me.userId).map(({ created_by, ...t }) => ({ ...t, project: t.project || (t.folder && t.folder.split('/').pop()) || null, folder: t.folder && t.folder.split('/').pop(), busy: !!t.busy, mine: created_by === me.userId })),
         messages: this.all('SELECT * FROM (SELECT id, author, kind, text, hist, created_at FROM messages WHERE id>? ORDER BY id DESC LIMIT 300) ORDER BY id', since),
         changes: this.one(`SELECT count(*) AS n FROM messages WHERE kind='change'`).n,
         running: jobs.filter(j => j.status === 'running').map(j => j.name),
@@ -405,7 +448,7 @@ ${log.map(m => m.kind === 'change' ? `[변경] ${m.author}: ${m.text}` : `${m.au
       const text = String(body.text || '').trim().slice(0, 20000);
       if (!text) return json(400, { error: '빈 메시지' });
       this.post(me.name, text);
-      this.mentions(me.name, text, 0);
+      this.mentions(me.name, text, 0, me.userId);
       return json(200, {});
     }
     if (sub === '/agents' && m === 'POST') {
@@ -430,6 +473,17 @@ ${log.map(m => m.kind === 'change' ? `[변경] ${m.author}: ${m.text}` : `${m.au
       const base = this.env.BASE_URL;
       return json(200, { id, command: `curl -fsSo clauduo-worker.js ${base}/worker.js && node clauduo-worker.js ${base} ${token}` });
     }
+    const agentWork = /^\/agents\/([^/]+)\/work$/.exec(sub);
+    if (agentWork && m === 'GET') { // 계정별 진행 상황. 공유 동의 전에는 내 Mac 정보를 본인에게만 보여 준다.
+      const a = this.one('SELECT id, created_by, shared FROM agents WHERE id=?', agentWork[1]);
+      if (!a) return json(404, { error: '없는 Claude예요' });
+      const open = a.shared === 1 || a.created_by === me.userId;
+      const jobs = this.all('SELECT j.status, j.started_at, j.progress, j.direct_text, j.thread_id, t.title, t.imported, t.created_by FROM jobs j LEFT JOIN threads t ON t.id=j.thread_id WHERE j.agent_id=? ORDER BY j.id', a.id)
+        .filter(j => !j.imported || open)
+        .map(j => { const p = j.progress && (j.thread_id || open) ? JSON.parse(j.progress) : null; return { id: j.thread_id, title: j.title || '팀 대화 멘션', status: j.status, started_at: j.started_at, text: p?.text?.slice(-400) || '', tools: p?.tools?.slice(-5) || [] }; });
+      const active = open ? this.all(`SELECT id, title, updated_at FROM threads WHERE imported=1 AND agent_id=? AND updated_at>? AND id NOT IN (SELECT thread_id FROM jobs WHERE thread_id IS NOT NULL) ORDER BY updated_at DESC`, a.id, Date.now() - 120e3).map(t => ({ id: t.id, title: t.title, status: 'active', started_at: t.updated_at, text: '', tools: [] })) : []; // ponytail: 세션 파일이 2분 안에 바뀌었는지로 추정, 실제 프로세스 확인은 아님
+      return json(200, [...jobs, ...active]);
+    }
     const agentRoute = /^\/agents\/([^/]+)$/.exec(sub);
     if (agentRoute && m === 'DELETE') {
       const a = this.one('SELECT * FROM agents WHERE id=?', agentRoute[1]);
@@ -445,27 +499,28 @@ ${log.map(m => m.kind === 'change' ? `[변경] ${m.author}: ${m.text}` : `${m.au
       const q = String(u.searchParams.get('q') || '').trim().slice(0, 100);
       if (!q) return json(200, []);
       const like = `%${q.replace(/[\\%_]/g, c => '\\' + c)}%`;
-      return json(200, this.all(`SELECT t.id, t.title, t.kind, t.env, substr(m.text, 1, 160) AS snippet, MAX(m.id) AS mid FROM thread_messages m JOIN threads t ON t.id=m.thread_id WHERE (t.imported=0 OR t.created_by=?) AND (m.text LIKE ? ESCAPE '\\' OR t.title LIKE ? ESCAPE '\\') GROUP BY t.id ORDER BY mid DESC LIMIT 30`, me.userId, like, like));
+      return json(200, this.all(`SELECT t.id, t.title, t.kind, t.env, substr(m.text, 1, 160) AS snippet, MAX(m.id) AS mid FROM thread_messages m JOIN threads t ON t.id=m.thread_id WHERE (t.imported=0 OR t.created_by=? OR t.agent_id IN ${SHARED_AGENTS}) AND (m.text LIKE ? ESCAPE '\\' OR t.title LIKE ? ESCAPE '\\') GROUP BY t.id ORDER BY mid DESC LIMIT 30`, me.userId, like, like));
     }
     if (sub === '/artifacts') {
       // 공유 작업공간에 저장된 HTML도 클라우드 결과물로 함께 보여준다
-      const saved = this.all('SELECT id, thread_id, title, author, updated_at, source FROM artifacts WHERE owner IS NULL OR owner=? ORDER BY updated_at DESC LIMIT 200', me.userId);
+      const saved = this.all(`SELECT id, thread_id, title, author, updated_at, source FROM artifacts WHERE owner IS NULL OR owner=? OR thread_id IN (SELECT id FROM threads WHERE agent_id IN ${SHARED_AGENTS}) ORDER BY updated_at DESC LIMIT 200`, me.userId);
       const shared = this.all(`SELECT path FROM files WHERE path LIKE '%.html' OR path LIKE '%.htm' ORDER BY path LIMIT 100`).map(f => ({ id: `file:${f.path}`, thread_id: null, title: f.path, author: '공유 파일', updated_at: 0, source: 'cloud', shared: true }));
       return json(200, [...saved, ...shared]);
     }
-    const artifact = /^\/artifacts\/([^/]+)$/.exec(sub);
+    const artifact = /^\/artifacts\/([^/]+?)(\/view)?$/.exec(sub), viewing = artifact?.[2] && m === 'GET';
     if (artifact) {
       const artId = decodeURIComponent(artifact[1]);
       if (artId.startsWith('file:')) {
         const f = this.one('SELECT path, data FROM files WHERE path=?', artId.slice(5));
         if (!f) return json(404, { error: '없는 아티팩트예요' });
         if (m !== 'GET') return json(400, { error: '공유 파일에서 지워 주세요' });
-        return json(200, { id: artId, title: f.path, html: Buffer.from(f.data).toString('utf8') });
+        const html = decodeText(Buffer.from(f.data)) ?? '';
+        return viewing ? artifactPage(html) : json(200, { id: artId, title: f.path, html });
       }
-      const a = this.one('SELECT * FROM artifacts WHERE id=? AND (owner IS NULL OR owner=?)', artId, me.userId);
+      const a = this.one(`SELECT * FROM artifacts WHERE id=? AND (owner IS NULL OR owner=? OR thread_id IN (SELECT id FROM threads WHERE agent_id IN ${SHARED_AGENTS}))`, artId, me.userId);
       if (!a) return json(404, { error: '없는 아티팩트예요' });
       if (m === 'DELETE') { this.sql.exec('DELETE FROM artifacts WHERE id=?', a.id); return json(200, {}); }
-      return json(200, a);
+      return viewing ? artifactPage(a.html) : json(200, a);
     }
     if (sub === '/instructions') {
       if (m === 'GET') return json(200, { text: this.instructions() });
@@ -517,15 +572,16 @@ ${log.map(m => m.kind === 'change' ? `[변경] ${m.author}: ${m.text}` : `${m.au
       }
       const model = ['opus', 'sonnet', 'haiku', 'fable'].includes(body.model) ? body.model : null;
       const mode = ['auto', 'acceptEdits', 'plan', 'bypassPermissions'].includes(body.mode) ? body.mode : 'auto';
-      const id = this.startThread({ text, agent: a, folder, kind, model, mode, userId: me.userId, author: me.name });
+      const effort = ['low', 'medium', 'high', 'xhigh', 'max'].includes(body.effort) ? body.effort : null;
+      const id = this.startThread({ text, agent: a, folder, kind, model, mode, effort, userId: me.userId, author: me.name });
       this.kick();
       return json(200, { id });
     }
     const threadRoute = /^\/threads\/([^/]+)(\/messages|\/cancel)?$/.exec(sub);
     if (threadRoute) {
       const t = this.one('SELECT * FROM threads WHERE id=?', threadRoute[1]);
-      if (!t || (t.imported && t.created_by !== me.userId)) return json(404, { error: '없는 작업이에요' }); // 불러온 세션은 본인에게만 보인다
-      if (m === 'GET') { const j = this.one('SELECT status, progress FROM jobs WHERE thread_id=?', t.id); return json(200, { jobStatus: j?.status || null, model: t.model, mode: t.mode, progress: j?.progress ? JSON.parse(j.progress) : null, turns: this.all('SELECT id, role, text, files, tools, created_at FROM thread_messages WHERE thread_id=? ORDER BY id', t.id).map(x => ({ ...x, files: JSON.parse(x.files), tools: JSON.parse(x.tools) })) }); }
+      if (!t || (t.imported && t.created_by !== me.userId && !this.one('SELECT 1 AS x FROM agents WHERE id=? AND shared=1', t.agent_id))) return json(404, { error: '없는 작업이에요' }); // 공유 동의 전 세션은 본인에게만 보인다
+      if (m === 'GET') { const j = this.one('SELECT status, progress FROM jobs WHERE thread_id=?', t.id); return json(200, { jobStatus: j?.status || null, model: t.model, mode: t.mode, effort: t.effort, progress: j?.progress ? JSON.parse(j.progress) : null, turns: this.all('SELECT id, role, text, files, tools, created_at FROM thread_messages WHERE thread_id=? ORDER BY id', t.id).map(x => ({ ...x, files: JSON.parse(x.files), tools: JSON.parse(x.tools) })) }); }
       if (t.created_by !== me.userId && !(m === 'DELETE' && owner)) return json(403, { error: '작업을 시작한 사람만 이어갈 수 있어요' });
       if (m === 'DELETE') { this.sql.exec('DELETE FROM jobs WHERE thread_id=?', t.id); this.sql.exec('DELETE FROM thread_messages WHERE thread_id=?', t.id); this.sql.exec('DELETE FROM threads WHERE id=?', t.id); return json(200, {}); }
       if (threadRoute[2] === '/cancel' && m === 'POST') {
@@ -558,7 +614,7 @@ ${log.map(m => m.kind === 'change' ? `[변경] ${m.author}: ${m.text}` : `${m.au
       if (m === 'GET') {
         if (!cur) return json(404, { error: '없는 파일' });
         const b = Buffer.from(cur.data);
-        return json(200, { text: b.includes(0) ? null : b.toString('utf8'), base: cur.sha });
+        return json(200, { text: decodeText(b), base: cur.sha, kind: mediaOf(rel)?.kind || null });
       }
       if (cur && !body.upload && body.base !== cur.sha) return json(409, { error: '그 사이 다른 멤버가 고쳤어요. 다시 열어 주세요.' });
       if (m === 'PUT') {
@@ -569,6 +625,11 @@ ${log.map(m => m.kind === 'change' ? `[변경] ${m.author}: ${m.text}` : `${m.au
         return json(200, {});
       }
       if (m === 'DELETE') { if (cur) this.writeFile(rel, null, me.name); return json(200, {}); }
+    }
+    if (sub === '/raw' && m === 'GET') {
+      const rel = safeRel(u.searchParams.get('path')), media = rel && mediaOf(rel), f = media && this.one('SELECT data FROM files WHERE path=?', rel);
+      if (!f) return json(404, { error: '미리볼 수 없는 파일이에요' });
+      return serveMedia(Buffer.from(f.data), media, req.headers.get('range'));
     }
     if (sub === '/revert' && m === 'POST') {
       const h = Number.isInteger(body.hist) && this.one('SELECT path, prev, existed FROM history WHERE id=?', body.hist);
@@ -745,7 +806,7 @@ async function handle(req, env) {
 
   const res = await callDO(env, ws, sub + u.search, {
     method: m, body: m === 'GET' ? undefined : JSON.stringify(body),
-    headers: { 'x-member': encodeURIComponent(JSON.stringify({ id: me.id, name: me.name, role: me.role, userId: user.id })) },
+    headers: { 'x-member': encodeURIComponent(JSON.stringify({ id: me.id, name: me.name, role: me.role, userId: user.id })), ...(req.headers.has('range') ? { range: req.headers.get('range') } : {}) },
   });
   if (sub !== '/state' || !res.ok) return res;
   const state = await res.json();
