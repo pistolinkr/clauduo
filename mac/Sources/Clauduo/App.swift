@@ -3,20 +3,25 @@ import Security
 import SwiftUI
 import WebKit
 
+/// 연결 토큰 저장소. 임시 서명 앱은 업데이트마다 서명이 바뀌어 키체인이 매번 비밀번호를 묻는다.
+/// ponytail: 권한 0600 파일에 저장(Clauduo 연결 토큰만, Claude 로그인 정보 아님). Apple 서명을 쓰게 되면 키체인으로 되돌린다.
 enum Keychain {
+    private static var dir: URL { FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("Clauduo/tokens") }
+    private static func file(_ key: String) -> URL { dir.appendingPathComponent(sha(Data(key.utf8))) }
     private static func query(_ key: String) -> [String: Any] { [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: "com.clauduo.mac", kSecAttrAccount as String: key] }
     static func load(_ key: String) -> String? {
+        if let v = try? String(contentsOf: file(key), encoding: .utf8) { return v }
         var q = query(key); q[kSecReturnData as String] = true
         var out: AnyObject?
-        guard SecItemCopyMatching(q as CFDictionary, &out) == errSecSuccess, let d = out as? Data else { return nil }
-        return String(data: d, encoding: .utf8)
+        guard SecItemCopyMatching(q as CFDictionary, &out) == errSecSuccess, let d = out as? Data, let v = String(data: d, encoding: .utf8) else { return nil }
+        save(key, v); SecItemDelete(query(key) as CFDictionary) // 이전 버전의 저장 위치에서 옮긴다
+        return v
     }
     static func save(_ key: String, _ v: String) {
-        SecItemDelete(query(key) as CFDictionary)
-        var q = query(key); q[kSecValueData as String] = Data(v.utf8)
-        SecItemAdd(q as CFDictionary, nil)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        FileManager.default.createFile(atPath: file(key).path, contents: Data(v.utf8), attributes: [.posixPermissions: 0o600])
     }
-    static func clear(_ key: String) { SecItemDelete(query(key) as CFDictionary) }
+    static func clear(_ key: String) { try? FileManager.default.removeItem(at: file(key)); SecItemDelete(query(key) as CFDictionary) }
 }
 
 /// config가 nil이면 이 Mac에 이미 로그인된 기본 계정이다.
@@ -77,6 +82,10 @@ final class Web: NSObject, WKUIDelegate, WKNavigationDelegate, WKScriptMessageHa
         let t = NSTextField(frame: NSRect(x: 0, y: 0, width: 280, height: 24)); t.stringValue = d ?? ""; a.accessoryView = t
         h(a.runModal() == .alertFirstButtonReturn ? t.stringValue : nil)
     }
+    func webView(_ w: WKWebView, runOpenPanelWith p: WKOpenPanelParameters, initiatedByFrame f: WKFrameInfo, completionHandler h: @escaping ([URL]?) -> Void) {
+        let o = NSOpenPanel(); o.canChooseFiles = !p.allowsDirectories; o.canChooseDirectories = p.allowsDirectories; o.allowsMultipleSelection = p.allowsMultipleSelection
+        o.begin { h($0 == .OK ? o.urls : nil) }
+    }
     func webView(_ w: WKWebView, decidePolicyFor a: WKNavigationAction, decisionHandler h: @escaping (WKNavigationActionPolicy) -> Void) {
         // 이 앱에서는 Clauduo만 연다. 다른 주소는 기본 브라우저로 보낸다.
         if let u = a.request.url, let host = u.host, host != URL(string: siteURL)!.host { NSWorkspace.shared.open(u); return h(.cancel) }
@@ -89,9 +98,10 @@ struct WebTab: NSViewRepresentable {
     func updateNSView(_ v: WKWebView, context: Context) {}
 }
 
-struct SiteThread: Decodable, Identifiable { let id, title, env, kind: String; let busy: Bool }
-struct SiteAgent: Decodable, Identifiable { let id, name, mode: String; let online: Bool }
-struct SiteState: Decodable { let signedIn: Bool; let view: String; let cur, ws, email, kind, agent: String?; let agents: [SiteAgent]; let threads: [SiteThread] }
+struct SiteThread: Decodable, Identifiable { let id, title, env, kind: String; let busy: Bool; let project: String? }
+struct SiteAgent: Decodable, Identifiable { let id, name, mode: String; let online: Bool; let mine: Bool? }
+struct SiteWorkspace: Decodable, Identifiable { let id, name, role: String }
+struct SiteState: Decodable { let signedIn: Bool; let view: String; let cur, ws, email, kind, agent: String?; let agents: [SiteAgent]; let workspaces: [SiteWorkspace]; let threads: [SiteThread] }
 enum Destination: Hashable { case view(String), thread(String), agent(String) }
 
 @MainActor final class Model: ObservableObject {
@@ -106,7 +116,7 @@ enum Destination: Hashable { case view(String), thread(String), agent(String) }
     func account(for a: SiteAgent) -> Account? {
         if let m = accounts.first(where: { $0.agentId == a.id }) { return m }
         let claimed = Set(accounts.map(\.agentId))
-        let firstFree = site?.agents.first { $0.mode == "worker" && !claimed.contains($0.id) }
+        let firstFree = site?.agents.first { $0.mode == "worker" && $0.mine == true && !claimed.contains($0.id) }
         return firstFree?.id == a.id ? accounts.first { $0.agentId.isEmpty } : nil
     }
 
@@ -120,6 +130,7 @@ enum Destination: Hashable { case view(String), thread(String), agent(String) }
     }
     private var currentSite: Destination? { site.map(destination) }
     func setKind(_ k: String) { call("clauduoKind(k)", ["k": k]) }
+    func selectWorkspace(_ id: String) { call("clauduoWs(id)", ["id": id]) }
     func logout() { call("clauduoLogout()", [:]) }
     private func call(_ js: String, _ args: [String: Any]) { Web.shared.view.callAsyncJavaScript(js, arguments: args, in: nil, in: .page) { _ in } }
 
@@ -131,7 +142,22 @@ enum Destination: Hashable { case view(String), thread(String), agent(String) }
     @Published var adding = false
     private var loops: [String: Task<Void, Never>] = [:]
 
-    init() { accounts.forEach(start) }
+    @Published var update: UpdateInfo?
+    @Published var updating = false
+    init() {
+        accounts.forEach(start)
+        Task { for _ in 0... { await refreshUpdate(); try? await Task.sleep(nanoseconds: 6 * 3600 * 1_000_000_000) } }
+    }
+    func refreshUpdate(announce: Bool = false) async {
+        update = await Updater.check()
+        if announce, update == nil { notify("최신 버전이에요. (\(Updater.current))") }
+    }
+    func installUpdate() async {
+        guard let info = update, !updating else { return }
+        updating = true; defer { updating = false }
+        do { try await Updater.install(info, relaunch: true); NSApp.terminate(nil) }
+        catch { notify("업데이트하지 못했어요: \(error.localizedDescription)") }
+    }
 
     func start(_ a: Account) {
         loops[a.key]?.cancel()
@@ -158,6 +184,16 @@ enum Destination: Hashable { case view(String), thread(String), agent(String) }
             guard await claudeAuth("login", config: dir.path) else { try? FileManager.default.removeItem(at: dir); notify("Claude 로그인을 마치지 못했어요."); return }
             config = dir.path
         }
+        if await createAgent(name: name, config: config, key: key) == false, let config { _ = await claudeAuth("logout", config: config); try? FileManager.default.removeItem(atPath: config) }
+    }
+
+    /// 다시 로그인하지 않고 같은 Claude 계정을 지금 워크스페이스에도 연결한다.
+    func link(_ a: Account) async {
+        adding = true; defer { adding = false }
+        _ = await createAgent(name: a.name == "기본 계정" ? "기본" : a.name, config: a.config, key: "agent-\(UUID().uuidString)")
+    }
+
+    private func createAgent(name: String, config: String?, key: String) async -> Bool {
         let js = """
         const ws = localStorage['clauduo.ws'];
         if (!ws) return JSON.stringify({ status: 0 });
@@ -166,11 +202,11 @@ enum Destination: Hashable { case view(String), thread(String), agent(String) }
         """
         let o = await site(js, ["name": name]), body = o?["body"] as? [String: Any]
         guard o?["status"] as? Int == 200, let cmd = body?["command"] as? String, let token = cmd.components(separatedBy: " ").last, let id = body?["id"] as? String else {
-            if let config { _ = await claudeAuth("logout", config: config); try? FileManager.default.removeItem(atPath: config) }
-            notify((body?["error"] as? String) ?? "먼저 로그인하고 워크스페이스를 만들어 주세요."); return
+            notify((body?["error"] as? String) ?? "먼저 로그인하고 워크스페이스를 만들어 주세요."); return false
         }
         let a = Account(key: key, name: name, agentId: id, ws: o?["ws"] as? String ?? "", config: config)
         Keychain.save(key, token); accounts.append(a); Accounts.list = accounts; start(a); showAdd = false
+        return true
     }
 
     func remove(_ a: Account) async {
@@ -179,7 +215,8 @@ enum Destination: Hashable { case view(String), thread(String), agent(String) }
         guard alert.runModal() == .alertFirstButtonReturn else { return }
         loops[a.key]?.cancel(); loops[a.key] = nil
         if !a.agentId.isEmpty { _ = await site("const r = await fetch(`/api/w/${ws}/agents/${id}`, { method: 'DELETE', headers: { 'content-type': 'application/json' }, body: '{}' }); return JSON.stringify({ status: r.status });", ["ws": a.ws, "id": a.agentId]) }
-        if let config = a.config { _ = await claudeAuth("logout", config: config); try? FileManager.default.removeItem(atPath: config) }
+        // 같은 로그인을 다른 워크스페이스에서도 쓰고 있으면 로그아웃하지 않는다
+        if let config = a.config, accounts.filter({ $0.config == config }).count == 1 { _ = await claudeAuth("logout", config: config); try? FileManager.default.removeItem(atPath: config) }
         Keychain.clear(a.key); accounts.removeAll { $0 == a }; Accounts.list = accounts; status[a.key] = nil
     }
 
@@ -195,6 +232,24 @@ enum Destination: Hashable { case view(String), thread(String), agent(String) }
 struct Sidebar: View {
     @ObservedObject var model: Model
     @AppStorage("fullAccess") private var fullAccess = false
+    @State private var open: [String: Bool] = [:]
+    private var kind: String { model.site?.kind ?? "code" }
+    private var threads: [SiteThread] { (model.site?.threads ?? []).filter { $0.kind == kind } }
+    private var groups: [(name: String, items: [SiteThread])] { // 최근 작업 순서를 유지한다
+        var out: [(name: String, items: [SiteThread])] = []
+        for t in threads {
+            let n = t.project ?? (t.env == "cloud" ? "공유 작업공간" : "기타")
+            if let i = out.firstIndex(where: { $0.name == n }) { out[i].items.append(t) } else { out.append((n, [t])) }
+        }
+        return out
+    }
+    private func row(_ t: SiteThread) -> some View {
+        HStack {
+            Label(t.title, systemImage: t.env == "local" ? "laptopcomputer" : "cloud").lineLimit(1)
+            Spacer()
+            if t.busy { ProgressView().controlSize(.mini) }
+        }.tag(Destination.thread(t.id))
+    }
     var body: some View {
         List(selection: Binding(get: { model.selection }, set: { model.selection = $0; model.go($0) })) {
             Section {
@@ -203,6 +258,7 @@ struct Sidebar: View {
                 Label("아티팩트", systemImage: "square.on.square").tag(Destination.view("artifacts"))
                 Label("예약", systemImage: "clock").tag(Destination.view("schedule"))
                 Label("맞춤 설정", systemImage: "slider.horizontal.3").tag(Destination.view("custom"))
+                Label("워크스페이스", systemImage: "square.stack").tag(Destination.view("workspaces"))
                 Label("팀 대화", systemImage: "bubble.left.and.bubble.right").tag(Destination.view("room"))
                 Label("공유 파일", systemImage: "folder").tag(Destination.view("files"))
                 Label("Claude와 팀원", systemImage: "person.2").tag(Destination.view("team"))
@@ -223,14 +279,21 @@ struct Sidebar: View {
             } header: {
                 HStack { Text("Claude 계정"); Spacer(); Button { model.showAdd = true } label: { Image(systemName: "plus") }.buttonStyle(.plain).accessibilityLabel("계정 추가") }
             }
-            Section("작업") {
-                if (model.site?.threads ?? []).allSatisfy({ $0.kind != (model.site?.kind ?? "code") }) { Text("아직 작업이 없어요.").foregroundStyle(.secondary) }
-                ForEach((model.site?.threads ?? []).filter { $0.kind == (model.site?.kind ?? "code") }) { t in
-                    HStack {
-                        Label(t.title, systemImage: t.env == "local" ? "laptopcomputer" : "cloud").lineLimit(1)
-                        Spacer()
-                        if t.busy { ProgressView().controlSize(.mini) }
-                    }.tag(Destination.thread(t.id))
+            if kind == "chat" {
+                Section("대화") {
+                    if threads.isEmpty { Text("아직 대화가 없어요.").foregroundStyle(.secondary) }
+                    ForEach(threads) { row($0) }
+                }
+            } else {
+                Section("프로젝트") {
+                    if threads.isEmpty { Text("아직 작업이 없어요.").foregroundStyle(.secondary) }
+                    ForEach(Array(groups.enumerated()), id: \.element.name) { i, g in
+                        DisclosureGroup(isExpanded: Binding(get: { open[g.name] ?? (i < 3 || g.items.contains { model.selection == .thread($0.id) }) }, set: { open[g.name] = $0 })) {
+                            ForEach(g.items) { row($0) }
+                        } label: {
+                            HStack { Label(g.name, systemImage: "folder").lineLimit(1); Spacer(); Text("\(g.items.count)").font(.caption).foregroundStyle(.secondary) }
+                        }
+                    }
                 }
             }
         }
@@ -255,10 +318,20 @@ struct AddAccount: View {
     @State private var name = ""
     @State private var current = false
     private var valid: Bool { name.range(of: "^[\\w가-힣-]{1,30}$", options: .regularExpression) != nil && !["all", "모두", "system"].contains(name) }
-    private var currentTaken: Bool { model.accounts.contains { $0.config == nil } }
+    private var here: [Account] { model.accounts.filter { $0.ws == model.site?.ws || $0.agentId.isEmpty } }
+    private var currentTaken: Bool { here.contains { $0.config == nil } }
+    private var reusable: [Account] { // 로그인 폴더 기준으로 한 번씩만 보여준다
+        var seen = Set<String>()
+        return model.accounts.filter { a in !here.contains { $0.config == a.config } && seen.insert(a.config ?? "default").inserted }
+    }
     var body: some View {
         Form {
             TextField("이름 (공백 없이)", text: $name)
+            if !reusable.isEmpty {
+                Section("다른 워크스페이스의 계정을 여기에 연결") {
+                    ForEach(reusable) { a in HStack { Text(a.name); Spacer(); Button("연결") { Task { await model.link(a) } }.disabled(model.adding) } }
+                }
+            }
             Toggle("이 Mac에 이미 로그인된 Claude 계정 사용", isOn: $current).disabled(currentTaken)
             if !current { Text("브라우저에서 추가할 Claude 계정으로 로그인해 주세요. 이미 다른 계정이 로그인돼 있으면 먼저 바꿔 주세요.").font(.caption).foregroundStyle(.secondary) }
         }
@@ -283,6 +356,12 @@ struct ImportSessions: View {
     @State private var done = 0
     @State private var total = 0
     @State private var loading = false
+    @State private var opened = Set<String>()
+    private var groups: [(name: String, path: String, items: [LocalSession])] {
+        var out: [(name: String, path: String, items: [LocalSession])] = []
+        for s in sessions { if let i = out.firstIndex(where: { $0.path == s.projectPath }) { out[i].items.append(s) } else { out.append((s.project, s.projectPath, [s])) } }
+        return out
+    }
     private var account: Account? { model.accounts.first { $0.key == key } }
     private func load() {
         picked = []; sessions = []; note = ""; loading = true
@@ -307,11 +386,21 @@ struct ImportSessions: View {
         VStack(alignment: .leading, spacing: 10) {
             Picker("계정", selection: $key) { ForEach(model.accounts) { Text($0.name).tag($0.key) } }
             Text("불러온 세션은 나에게만 보여요. 이어서 작업하려면 해당 폴더를 허용해 주세요.").font(.caption).foregroundStyle(.secondary)
-            List(sessions) { s in
-                Toggle(isOn: Binding(get: { picked.contains(s.id) }, set: { if $0 { picked.insert(s.id) } else { picked.remove(s.id) } })) {
-                    VStack(alignment: .leading, spacing: 1) {
-                        Text(s.title).lineLimit(1)
-                        Text("\((s.cwd as NSString).lastPathComponent) · \(s.updated.formatted(date: .abbreviated, time: .shortened))").font(.caption).foregroundStyle(.secondary)
+            List {
+                ForEach(groups, id: \.path) { g in
+                    DisclosureGroup(isExpanded: Binding(get: { opened.contains(g.path) }, set: { if $0 { opened.insert(g.path) } else { opened.remove(g.path) } })) {
+                        ForEach(g.items) { s in
+                            Toggle(isOn: Binding(get: { picked.contains(s.id) }, set: { if $0 { picked.insert(s.id) } else { picked.remove(s.id) } })) {
+                                VStack(alignment: .leading, spacing: 1) {
+                                    Text(s.title).lineLimit(1)
+                                    Text(s.updated.formatted(date: .abbreviated, time: .shortened)).font(.caption).foregroundStyle(.secondary)
+                                }
+                            }
+                        }
+                    } label: {
+                        Toggle(isOn: Binding(get: { g.items.allSatisfy { picked.contains($0.id) } }, set: { on in for s in g.items { if on { picked.insert(s.id) } else { picked.remove(s.id) } } })) {
+                            HStack { Text(g.name).bold().lineLimit(1).help(g.path); Spacer(); Text("\(g.items.count)개").font(.caption).foregroundStyle(.secondary) }
+                        }
                     }
                 }
             }.frame(height: 340)
@@ -385,10 +474,21 @@ struct Root: View {
         }
         .toolbar {
             if model.site?.signedIn == true {
+                ToolbarItem(placement: .navigation) {
+                    Menu {
+                        Section("내 워크스페이스") { ForEach((model.site?.workspaces ?? []).filter { $0.role == "owner" }) { w in Button(w.name + (w.id == model.site?.ws ? " ✓" : "")) { model.selectWorkspace(w.id) } } }
+                        Section("초대받은 워크스페이스") { ForEach((model.site?.workspaces ?? []).filter { $0.role != "owner" }) { w in Button(w.name + (w.id == model.site?.ws ? " ✓" : "")) { model.selectWorkspace(w.id) } } }
+                    } label: { Label(model.site?.workspaces.first { $0.id == model.site?.ws }?.name ?? "워크스페이스", systemImage: "square.stack").labelStyle(.titleAndIcon) }
+                }
                 ToolbarItem(placement: .status) {
                     Label(model.accounts.isEmpty ? "이 Mac 연결 안 됨" : "로컬 계정 \(model.accounts.count)개", systemImage: model.accounts.isEmpty ? "laptopcomputer.slash" : "laptopcomputer").labelStyle(.titleAndIcon).font(.caption).foregroundStyle(.secondary)
                 }
                 ToolbarSpacer(.flexible)
+                if let u = model.update {
+                    ToolbarItem {
+                        Button { Task { await model.installUpdate() } } label: { Label(model.updating ? "업데이트 중" : "\(u.version) 업데이트", systemImage: "arrow.down.circle").labelStyle(.titleAndIcon) }.disabled(model.updating)
+                    }
+                }
                 ToolbarItemGroup {
                     Button { model.showImport = true } label: { Label("세션 불러오기", systemImage: "clock.arrow.circlepath") }.disabled(model.accounts.isEmpty)
                     Button { model.showAdd = true } label: { Label("계정 추가", systemImage: "person.crop.circle.badge.plus") }
@@ -414,6 +514,7 @@ struct ClauduoApp: App {
     @StateObject private var model = Model()
     var body: some Scene {
         WindowGroup("Clauduo") { Root(model: model) }.windowToolbarStyle(.unified)
+            .commands { CommandGroup(after: .appInfo) { Button("업데이트 확인…") { Task { await model.refreshUpdate(announce: true); if model.update != nil { await model.installUpdate() } } } } }
     }
 }
 
@@ -423,6 +524,11 @@ struct ClauduoApp: App {
         // 테스트와 자동화용 실행 모드
         if a.count == 4, a[1] == "--worker" {
             Task { let f = ProcessInfo.processInfo.environment["CLAUDUO_FOLDERS"]?.components(separatedBy: ":") ?? []; await workerLoop(Client(url: a[2], token: a[3]), config: ProcessInfo.processInfo.environment["CLAUDUO_CONFIG_DIR"], fullAccessAllowed: { ProcessInfo.processInfo.environment["CLAUDUO_FULL"] != nil }, folders: { f }) { print($0) }; exit(0) }
+            dispatchMain()
+        }
+        if a.count == 2, a[1] == "--version" { print(Updater.current); exit(0) }
+        if a.count == 2, a[1] == "--self-update" { // 업데이트 절차 시험용
+            Task { guard let u = await Updater.check() else { exit(3) }; do { try await Updater.install(u, relaunch: false); exit(0) } catch { print(error.localizedDescription); exit(1) } }
             dispatchMain()
         }
         if a.count == 5, a[1] == "--import" {

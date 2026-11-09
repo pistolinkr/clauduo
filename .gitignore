@@ -6,3 +6,4 @@ node_modules/
 clauduo-worker.js
 mac/.build/
 mac/dist/
+public/mac/Clauduo.dmg

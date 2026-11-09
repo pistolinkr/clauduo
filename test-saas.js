@@ -93,6 +93,11 @@ const mock = http.createServer(async (req, res) => {
     assert.equal((await B('POST', '/api/invites/accept', { token: inv })).s, 200);
     assert.equal((await C('POST', '/api/invites/accept', { token: inv })).s, 403, 'invite single use');
     assert.equal((await B('POST', W('/invites'))).s, 403, 'member cannot invite');
+    assert((await B('GET', '/api/me')).j.workspaces.some(x => x.id === ws && x.role === 'member'), 'invited workspace listed');
+    const own = (await B('POST', '/api/workspaces', { name: 'Own' })).j.id;
+    assert.equal((await B('GET', '/api/me')).j.workspaces.length, 2, 'own and invited stay separate');
+    assert.equal((await A('GET', `/api/w/${own}/state`)).s, 404, 'own workspace stays private');
+    await B('DELETE', `/api/w/${own}`);
     assert.equal((await B('DELETE', W(''))).s, 403, 'member cannot delete workspace');
 
     for (const p of ['../x', '/etc/x', 'a/../../x', 'a/.claude/settings.json'])
@@ -110,6 +115,19 @@ const mock = http.createServer(async (req, res) => {
     const files = (await A('GET', W('/files'))).j;
     assert(files.includes('work/made.txt'), 'worker sync');
     assert(!files.includes('work/link'), 'symlink excluded');
+
+    // 업로드: 바이너리 보존, 덮어쓰기, 조용한 일괄 처리, 경로·용량 제한
+    const before = (await A('GET', W('/state'))).j.messages.length;
+    const png = Buffer.from([137, 80, 78, 71, 0, 1, 2, 255]).toString('base64');
+    assert.equal((await A('PUT', W('/file'), { path: 'up/dir/a.png', data: png, upload: true })).s, 200, 'binary upload');
+    assert.equal((await A('PUT', W('/file'), { path: 'up/dir/a.png', data: png, upload: true })).s, 200, 'upload overwrites');
+    assert.equal((await A('GET', W('/file?path=up/dir/a.png'))).j.text, null, 'stored as binary');
+    assert.equal((await A('PUT', W('/file'), { path: '.claude/x', data: png, upload: true })).s, 400, 'blocked path');
+    assert.equal((await A('PUT', W('/file'), { path: 'big.bin', data: Buffer.alloc(2e6).toString('base64'), upload: true })).s, 413, 'file limit');
+    await A('POST', W('/upload-done'), { count: 1 });
+    const upMsgs = (await A('GET', W('/state'))).j.messages.slice(before);
+    assert.equal(upMsgs.length, 1, 'upload posts one summary'); assert.equal(upMsgs[0].hist, null);
+    assert.equal((await C('PUT', W('/file'), { path: 'x', data: png, upload: true })).s, 404, 'upload isolated');
 
     // 하나의 공간: 로컬 실행 환경 권한
     const proj = path.join(tmp, 'proj'); fs.mkdirSync(proj); fs.writeFileSync(path.join(proj, 'old.txt'), 'old\n');
@@ -152,6 +170,7 @@ const mock = http.createServer(async (req, res) => {
       assert.equal((await C('GET', W('/threads/' + made.j.id))).s, 404, 'thread isolated');
       assert(fs.existsSync(path.join(proj, 'work/made.txt')), 'ran in real folder');
       assert(turns[1].tools.some(x => x.includes('Bash: ls -la')), 'tool activity recorded');
+      assert.equal((await B('GET', W('/state'))).j.threads.find(t => t.id === made.j.id).project, 'proj', 'local thread project');
       assert((await B('GET', W('/artifacts'))).j.some(a => a.title === 'proj/artifacts/report' && a.source === 'local'), 'local artifact');
       assert((await B('GET', W('/artifacts'))).j.some(a => a.title === 'proj/artifacts/old' && a.source === 'local'), 'existing local artifact imported');
       const lc = await B('POST', W('/threads'), { text: '맥 채팅', agentId: wkId, kind: 'chat' });
@@ -176,11 +195,24 @@ const mock = http.createServer(async (req, res) => {
         u('assistant', [{ type: 'thinking', thinking: 'x' }]),
         u('assistant', [{ type: 'text', text: '답변 일부' }]),
         u('assistant', [{ type: 'tool_use', name: 'Bash', input: { command: 'pwd' } }]),
+        u('assistant', [{ type: 'tool_use', name: 'Write', input: { file_path: '/gone/report.html', content: '<p>restored</p>' } }]),
+        u('assistant', [{ type: 'tool_use', name: 'Artifact', input: { file_path: '/gone/report.html', title: '복원 아티팩트' } }]),
+        u('assistant', [{ type: 'tool_use', name: 'Write', input: { file_path: '/gone/unpublished.html', content: 'x' } }]),
         JSON.stringify({ type: 'custom-title', customTitle: '내 세션 제목' }),
       ].join('\n') + '\n');
+      const wtSid = '99999999-2222-3333-4444-555555555555';
+      fs.writeFileSync(path.join(imp, wtSid + '.jsonl'), JSON.stringify({ type: 'user', cwd: proj + '/.claude/worktrees/wt', sessionId: wtSid, message: { content: '워크트리 작업' } }) + '\n');
       require('child_process').execFileSync(process.env.MAC_BIN, ['--import', U, token, path.join(tmp, 'imp')], { env, stdio: 'ignore' });
       const impId = 'imp-' + sid, it = (await B('GET', W('/threads/' + impId))).j;
       assert.equal(it.turns.length, 2, 'import filters hidden events');
+      const impList = (await B('GET', W('/state'))).j.threads;
+      assert.equal(impList.find(t => t.id === impId).project, 'proj', 'session grouped by project');
+      assert.equal(impList.find(t => t.id === 'imp-' + wtSid).project, 'proj', 'worktree grouped with project');
+      const ra = (await B('GET', W('/artifacts'))).j.find(a => a.title === '복원 아티팩트');
+      assert(ra, 'published artifact restored from session'); assert.equal((await B('GET', W('/artifacts/' + ra.id))).j.html, '<p>restored</p>', 'artifact content from transcript');
+      assert(!(await B('GET', W('/artifacts'))).j.some(a => a.title === 'unpublished'), 'unpublished html not imported');
+      assert(!(await A('GET', W('/artifacts'))).j.some(a => a.title === '복원 아티팩트'), 'restored artifact private');
+      assert.equal((await A('GET', W('/artifacts/' + ra.id))).s, 404, 'restored artifact blocked for teammates');
       assert.equal(it.turns[0].text, '가져올 첫 질문'); assert.equal(it.turns[1].text, '답변 일부');
       assert(it.turns[1].tools.some(x => x.includes('Bash: pwd')), 'import tools');
       assert((await B('GET', W('/state'))).j.threads.find(t => t.id === impId).title === '내 세션 제목', 'import title');

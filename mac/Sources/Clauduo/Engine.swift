@@ -64,7 +64,7 @@ func claudeAuth(_ action: String, config: String) async -> Bool {
     return await execute(claude, ["auth", action], cwd: nil, input: Data(), env: claudeEnv(config)).code == 0
 }
 
-private func execute(_ tool: String, _ args: [String], cwd: URL?, input: Data?, env: [String: String]? = nil) async -> (code: Int32, out: Data, err: Data) {
+func execute(_ tool: String, _ args: [String], cwd: URL?, input: Data?, env: [String: String]? = nil) async -> (code: Int32, out: Data, err: Data) {
     await withCheckedContinuation { cont in
         DispatchQueue.global().async {
             let p = Process(), o = Pipe(), e = Pipe(), i = Pipe()
@@ -277,7 +277,12 @@ func localRun(folder: URL, prompt: String, config: String?, opts: RunOptions, on
 }
 
 // ---- Claude Code/앱이 이 Mac에 저장한 세션 불러오기 ----
-struct LocalSession: Identifiable, Hashable, Sendable { let id, title, cwd: String; let updated: Date; let path: String }
+struct LocalSession: Identifiable, Hashable, Sendable {
+    let id, title, cwd: String; let updated: Date; let path: String
+    /// Claude의 작업트리에서 한 세션은 원래 프로젝트로 묶는다.
+    var projectPath: String { ["/.claude/worktrees/", "/.claude-worktrees/"].compactMap { cwd.range(of: $0).map { String(cwd[..<$0.lowerBound]) } }.first ?? cwd }
+    var project: String { projectPath.isEmpty ? "기타" : (projectPath as NSString).lastPathComponent }
+}
 
 func sessionsRoot(_ config: String?) -> URL { URL(fileURLWithPath: config ?? NSHomeDirectory() + "/.claude").appendingPathComponent("projects") }
 
@@ -316,13 +321,18 @@ func listSessions(config: String?) -> [LocalSession] {
 
 func uploadSession(_ s: LocalSession, client: Client) async -> Bool {
     guard let data = try? Data(contentsOf: URL(fileURLWithPath: s.path), options: .mappedIfSafe) else { return false }
-    var turns: [[String: Any]] = []
+    var turns: [[String: Any]] = [], written: [String: String] = [:], published: [String: String] = [:]
     for e in lines(data) where e["isSidechain"] as? Bool != true && e["isMeta"] as? Bool != true {
         let content = (e["message"] as? [String: Any])?["content"]
         if e["type"] as? String == "user" {
             let t = visibleText(content)
             if !t.isEmpty { turns.append(["role": "user", "text": t, "tools": [String]()]) }
         } else if e["type"] as? String == "assistant" {
+            for b in content as? [[String: Any]] ?? [] where b["type"] as? String == "tool_use" {
+                guard let input = b["input"] as? [String: Any], let path = input["file_path"] as? String, path.hasSuffix(".html") else { continue }
+                if b["name"] as? String == "Write" { written[path] = input["content"] as? String }
+                if b["name"] as? String == "Artifact", (input["action"] as? String ?? "publish") == "publish" { published[path] = (input["title"] as? String) ?? ((path as NSString).lastPathComponent as NSString).deletingPathExtension }
+            }
             let text = visibleText(content), used = (content as? [[String: Any]] ?? []).filter { $0["type"] as? String == "tool_use" }.map { toolLine($0["name"] as? String ?? "", $0["input"] as? [String: Any] ?? [:]) }
             if text.isEmpty && used.isEmpty { continue }
             if turns.last?["role"] as? String == "assistant" { // 한 번의 응답이 여러 줄로 저장돼 있어 합친다
@@ -333,6 +343,57 @@ func uploadSession(_ s: LocalSession, client: Client) async -> Bool {
             } else { turns.append(["role": "assistant", "text": text, "tools": used]) }
         }
     }
-    let body: [String: Any] = ["sessions": [["id": s.id, "title": s.title, "folder": s.cwd, "updated": s.updated.timeIntervalSince1970 * 1000, "turns": Array(turns.suffix(300))]]]
+    // 게시했던 아티팩트를 복원한다. 파일이 지워졌으면 세션 기록의 작성 내용을 쓴다.
+    let artifacts: [[String: String]] = published.prefix(20).compactMap { path, title in
+        let file = (try? Data(contentsOf: URL(fileURLWithPath: path))).map { String(decoding: $0, as: UTF8.self) }
+        return (file ?? written[path]).map { ["title": title, "html": $0] }
+    }
+    let body: [String: Any] = ["sessions": [["id": s.id, "title": s.title, "folder": s.cwd, "project": s.project, "updated": s.updated.timeIntervalSince1970 * 1000, "turns": Array(turns.suffix(300)), "artifacts": artifacts]]]
     return (try? await client.call("POST", "/api/worker/sessions", body))?.0 == 200
+}
+
+// ---- 앱 업데이트: clauduo.com의 latest.json을 확인하고 DMG로 교체한다 ----
+struct UpdateInfo: Decodable, Sendable { let version, url, sha256: String }
+
+enum Updater {
+    static var current: String { Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0" }
+
+    static func check() async -> UpdateInfo? {
+        guard let (d, r) = try? await URLSession.shared.data(for: URLRequest(url: URL(string: siteURL + "/mac/latest.json")!, cachePolicy: .reloadIgnoringLocalCacheData)), (r as? HTTPURLResponse)?.statusCode == 200,
+              let info = try? JSONDecoder().decode(UpdateInfo.self, from: d),
+              info.version.compare(current, options: .numeric) == .orderedDescending else { return nil }
+        return info
+    }
+
+    struct Failure: LocalizedError { let errorDescription: String? }
+    private static func run(_ tool: String, _ args: [String]) async throws {
+        let r = await execute(tool, args, cwd: nil, input: nil)
+        if r.code != 0 { throw Failure(errorDescription: String(decoding: r.err, as: UTF8.self)) }
+    }
+
+    /// 내려받아 검증한 뒤, 앱이 종료되면 교체하는 스크립트를 띄운다. 호출한 쪽에서 앱을 종료해야 한다.
+    static func install(_ info: UpdateInfo, relaunch: Bool) async throws {
+        let target = Bundle.main.bundleURL, site = URL(string: siteURL)!, fm = FileManager.default
+        guard fm.isWritableFile(atPath: target.deletingLastPathComponent().path), !target.path.hasPrefix("/Volumes/") else {
+            throw Failure(errorDescription: "앱을 응용 프로그램 폴더로 옮긴 뒤 다시 시도해 주세요.")
+        }
+        // 업데이트는 Clauduo 서버에서만 받는다
+        guard let url = URL(string: info.url, relativeTo: site)?.absoluteURL, url.host == site.host, url.scheme == site.scheme else { throw Failure(errorDescription: "잘못된 업데이트 주소예요.") }
+        let (file, _) = try await URLSession.shared.download(from: url)
+        defer { try? fm.removeItem(at: file) }
+        guard let data = try? Data(contentsOf: file, options: .mappedIfSafe), sha(data) == info.sha256 else { throw Failure(errorDescription: "내려받은 파일 검증에 실패했어요.") }
+        let work = fm.temporaryDirectory.appendingPathComponent("clauduo-update-\(UUID().uuidString)"), mount = work.appendingPathComponent("m"), staged = work.appendingPathComponent("Clauduo.app")
+        try fm.createDirectory(at: mount, withIntermediateDirectories: true)
+        let dmg = work.appendingPathComponent("u.dmg"); try fm.copyItem(at: file, to: dmg)
+        try await run("/usr/bin/hdiutil", ["attach", dmg.path, "-nobrowse", "-readonly", "-mountpoint", mount.path])
+        do { try await run("/usr/bin/ditto", [mount.appendingPathComponent("Clauduo.app").path, staged.path]) }
+        catch { try? await run("/usr/bin/hdiutil", ["detach", mount.path, "-force"]); throw error }
+        try await run("/usr/bin/hdiutil", ["detach", mount.path, "-force"])
+        try await run("/usr/bin/codesign", ["--verify", "--deep", staged.path])
+        let script = #"while kill -0 "$1" 2>/dev/null; do sleep 0.2; done; rm -rf "$2"; /usr/bin/ditto "$3" "$2"; rm -rf "$4"; [ "$5" = 1 ] && /usr/bin/open "$2""#
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/bin/sh")
+        p.arguments = ["-c", script, "sh", String(getpid()), target.path, staged.path, work.path, relaunch ? "1" : "0"]
+        try p.run()
+    }
 }

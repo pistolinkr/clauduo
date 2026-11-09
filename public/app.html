@@ -40,6 +40,7 @@ html.native #side,html.native #menuBtn { display: none !important; } html.native
 .seg { display: grid; grid-template-columns: 1fr 1fr; gap: 2px; background: var(--hover); border-radius: 10px; padding: 2px; margin-bottom: 6px; } .seg button { justify-content: center; padding: 4px; border-radius: 8px; } .seg button.on { background: var(--card); font-weight: 600; }
 .res { display: block; width: 100%; text-align: left; border: 0; border-bottom: 1px solid var(--line); border-radius: 0; padding: 10px 4px; font-weight: 400; } .res b { font-weight: 550; display: block; } .res small { color: var(--dim); display: block; overflow-wrap: anywhere; } #frame { flex: 1; width: 100%; min-height: 0; border: 0; background: #fff; } #custom { width: 100%; min-height: 200px; resize: vertical; background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 12px; } .form { display: flex; flex-direction: column; gap: 8px; margin-bottom: 20px; } .form textarea { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 10px; resize: vertical; min-height: 70px; } .form .bar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; } .form select,.form input { min-width: 0; } h2.t { font-size: 20px; font-weight: 600; margin: 0 0 14px; }
 .md { overflow-wrap: anywhere; } .md p { margin: 0 0 10px; white-space: pre-wrap; } .md > :last-child { margin-bottom: 0; } .md h3,.md h4,.md h5,.md h6 { margin: 14px 0 6px; font-size: 16px; font-weight: 650; } .md ul,.md ol { margin: 0 0 10px; padding-left: 22px; } .md pre { margin: 8px 0 12px; max-height: 480px; } .md code { display: inline; background: var(--hover); padding: 1px 5px; border-radius: 5px; font-size: .88em; user-select: text; } .md a { color: var(--accent); }
+.proj { flex: none; } .proj > summary { display: flex; gap: 8px; align-items: center; padding: 5px 9px; font-size: 12.5px; font-weight: 600; color: var(--dim); cursor: pointer; border-radius: 8px; } .proj > summary:hover { background: var(--hover); } .proj > summary .t { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; } .proj .th { padding-left: 16px; }
 #menuBtn { display: none; border: 0; padding: 6px; } @media (max-width: 760px) { #app { grid-template-columns: minmax(0,1fr); } #side { display: none; position: fixed; inset: 0 20% 0 0; z-index: 5; box-shadow: 0 0 30px rgb(0 0 0 / .3); } #side.open { display: flex; } #menuBtn { display: inline-flex; position: fixed; top: 9px; left: 9px; z-index: 4; background: var(--bg); } .thead { padding-left: 50px; } #home { padding-top: 40px; } #filesView { flex-direction: column; } #files { width: auto; max-height: 28dvh; border-right: 0; border-bottom: 1px solid var(--line); } }
 </style>
 </head>
@@ -70,6 +71,7 @@ html.native #side,html.native #menuBtn { display: none !important; } html.native
     <div class="brand"><span class="mark"></span>Clauduo</div>
     <div class="nav">
       <div class="seg" role="tablist"><button id="kindChat">Chat</button><button id="kindCode">Code</button></div>
+      <button id="navWs"><svg class="i"><use href="#team"/></svg><span class="t" id="wsCurrent" style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">워크스페이스</span></button>
       <button id="navNew"><svg class="i"><use href="#plus"/></svg>새 작업</button>
       <button id="navSearch"><svg class="i"><use href="#search"/></svg>검색</button>
       <button id="navArtifacts"><svg class="i"><use href="#art"/></svg>아티팩트</button>
@@ -83,7 +85,7 @@ html.native #side,html.native #menuBtn { display: none !important; } html.native
     <div class="foot"><span id="meEmail"></span><button class="link" id="logout">로그아웃</button></div>
   </aside>
   <main>
-    <section class="view" id="home"><div class="col"><h1 id="homeTitle">무엇을 함께 할까요?</h1>
+    <section class="view" id="home"><div class="col"><div id="homeWs" style="text-align:center;color:var(--dim);font-size:13px;margin-bottom:6px"></div><h1 id="homeTitle">무엇을 함께 할까요?</h1>
       <form class="box" id="newForm"><textarea id="newText" placeholder="작업을 설명해 주세요" aria-label="새 작업"></textarea>
         <div class="boxbar"><span style="display:flex;gap:6px;min-width:0;flex-wrap:wrap"><select id="envSel" aria-label="실행 환경"></select><select id="modelSel" aria-label="모델" hidden><option value="">기본 모델</option><option value="fable">Fable</option><option value="opus">Opus</option><option value="sonnet">Sonnet</option><option value="haiku">Haiku</option></select><select id="modeSel" aria-label="권한" hidden><option value="auto">자동</option><option value="acceptEdits">수정만 허용</option><option value="plan">계획만</option><option value="bypassPermissions">전체 권한</option></select></span><button class="send">시작</button></div></form></div></section>
     <section class="view" id="thread" hidden>
@@ -98,7 +100,7 @@ html.native #side,html.native #menuBtn { display: none !important; } html.native
     </section>
     <section class="view" id="filesView" hidden>
       <div id="files"></div>
-      <div id="editWrap"><div class="fbar"><span id="cur">파일을 선택하세요</span><input id="newPath" placeholder="폴더/새파일.md" aria-label="새 파일 경로"><button id="newBtn">새 파일</button><button id="del" disabled>삭제</button><button class="p" id="save" disabled>저장</button></div><textarea id="editor" disabled aria-label="파일 내용"></textarea></div>
+      <div id="editWrap"><div class="fbar"><span id="cur">파일을 선택하세요</span><input id="newPath" placeholder="폴더/새파일.md" aria-label="새 파일 경로"><button id="newBtn">새 파일</button><button id="upFiles">파일 업로드</button><button id="upDir">폴더 업로드</button><input id="fileIn" type="file" multiple hidden><input id="dirIn" type="file" webkitdirectory multiple hidden><button id="del" disabled>삭제</button><button class="p" id="save" disabled>저장</button></div><textarea id="editor" disabled aria-label="파일 내용"></textarea></div>
     </section>
     <section class="view" id="searchView" hidden><div class="scroll"><div class="col"><h2 class="t">검색</h2><input id="q" type="search" placeholder="작업과 대화 내용 검색" aria-label="검색" style="width:100%;margin-bottom:10px"><div id="results"></div></div></div></section>
     <section class="view" id="artifactsView" hidden><div class="thead"><b id="artTitle">아티팩트</b><select id="artFilter" aria-label="출처 필터" style="padding:3px 8px;font-size:13px"><option value="">전체</option><option value="local">로컬</option><option value="cloud">클라우드</option></select><span style="flex:1"></span><button class="link" id="artDel" hidden>삭제</button><button class="link" id="artBack" hidden>목록</button></div><div class="scroll" id="artList"><div class="col" id="arts"></div></div><iframe id="frame" sandbox="allow-scripts" title="아티팩트 미리보기" hidden></iframe></section>
@@ -107,12 +109,16 @@ html.native #side,html.native #menuBtn { display: none !important; } html.native
       <div id="schList"></div></div></div></section>
     <section class="view" id="customView" hidden><div class="scroll"><div class="col"><h2 class="t">맞춤 설정</h2><p style="color:var(--dim);margin:0 0 10px;font-size:14px">이 워크스페이스의 모든 작업에 적용할 지침이에요.</p><textarea id="custom" aria-label="워크스페이스 지침" maxlength="8000"></textarea><div style="display:flex;gap:8px;margin-top:10px"><button class="p" id="customSave">저장</button><button id="customMac" hidden>Mac 계정별 설정</button></div></div></div></section>
     <section class="view" id="agentView" hidden><div class="thead"><b id="agTitle"></b><span class="env" id="agEnv"></span><span style="flex:1"></span><button class="link" id="agMention">팀 대화에서 부르기</button></div><div class="scroll"><div class="col"><h2 class="t" style="font-size:16px">작업</h2><div id="agThreads" style="margin-bottom:22px"></div><h2 class="t" style="font-size:16px">아티팩트</h2><div id="agArts"></div></div></div></section>
+    <section class="view" id="wsView" hidden><div class="scroll"><div class="col"><h2 class="t">워크스페이스</h2>
+      <h2 class="t" style="font-size:15px;margin-top:6px">내 워크스페이스</h2><div id="wsMine" style="margin-bottom:22px"></div>
+      <h2 class="t" style="font-size:15px">초대받은 워크스페이스</h2><div id="wsInvited" style="margin-bottom:22px"></div>
+      <div style="display:flex;gap:8px"><button id="wsNew">새 워크스페이스</button><button class="joinOpen">초대 링크로 들어가기</button></div>
+    </div></div></section>
     <section class="view" id="teamView" hidden><div class="scroll"><div class="col team">
       <div><h2>Claude <button id="agentOpen">추가</button></h2><div id="agents"></div></div>
       <div id="macBox" hidden><h2>이 Mac</h2><div class="row"><div class="n"><b>로컬 실행</b><small>연결하면 입력창에서 이 Mac의 폴더를 고를 수 있어요.</small></div><button id="macConnect">연결</button><button id="macFolder">폴더 허용</button></div></div>
       <div><h2>팀원 <button id="invOpen">초대</button></h2><div id="members"></div></div>
-      <div><h2>워크스페이스</h2><select id="wsSel" aria-label="워크스페이스 선택" style="width:100%"></select></div>
-      <div style="display:flex;gap:14px"><button class="link joinOpen">초대 링크로 들어가기</button><button class="link" id="wsNew">새 워크스페이스</button><button class="link" id="wsDel" hidden>이 워크스페이스 삭제</button></div>
+      <div style="display:flex;gap:14px"><button class="link" id="wsDel" hidden>이 워크스페이스 삭제</button></div>
     </div></div></section>
   </main>
 </div>
@@ -135,8 +141,9 @@ const hash = new URLSearchParams(location.hash.slice(1));
 const bridge = window.webkit?.messageHandlers?.clauduo;
 function store0(k) { try { return localStorage[k]; } catch { return null; } }
 if (bridge) document.documentElement.classList.add('native');
+const projectOpen = new Map();
 let agentCur = null, agentKey = '', pendingArt = null, nativeKey = '', kind = store0('clauduo.kind') === 'chat' ? 'chat' : 'code';
-function pushNative(signedIn = true) { if (!bridge) return; const m = JSON.stringify({ signedIn, view, cur, ws, kind, agent: agentCur, agents: (state?.agents || []).map(a => ({ id: a.id, name: a.name, mode: a.mode, online: a.online })), email: me?.email || '', threads: (state?.threads || []).map(t => ({ id: t.id, title: t.title, env: t.env, kind: t.kind, busy: t.busy })) }); if (m !== nativeKey) { nativeKey = m; bridge.postMessage(m); } }
+function pushNative(signedIn = true) { if (!bridge) return; const m = JSON.stringify({ signedIn, view, cur, ws, kind, workspaces: wsList.map(x => ({ id: x.id, name: x.name, role: x.role })), agent: agentCur, agents: (state?.agents || []).map(a => ({ id: a.id, name: a.name, mode: a.mode, online: a.online })), email: me?.email || '', threads: (state?.threads || []).map(t => ({ id: t.id, title: t.title, env: t.env, kind: t.kind, busy: t.busy, project: t.project })) }); if (m !== nativeKey) { nativeKey = m; bridge.postMessage(m); } }
 const store = { get: k => { try { return localStorage[k]; } catch {} }, set: (k, v) => { try { localStorage[k] = v; } catch {} } };
 let pendingInvite = hash.get('invite'), ws, wsList = [], since = 0, gen = 0, timer, me, state, view = 'home', cur = null, turnKey = '', listKey = '', peopleKey = '', envKey = '', lastChanges = -1, fileKey = '', openPath = null, base;
 
@@ -149,12 +156,12 @@ async function api(method, url, body) {
 const guard = f => async (...a) => { try { await f(...a); } catch (e) { alert(e.message); } };
 const w = p => `/api/w/${ws}${p}`;
 const screen = id => { for (const s of ['auth', 'sent', 'first', 'app']) $(s).hidden = s !== id; if (id !== 'app') pushNative(false); };
-window.clauduoNav = (v, id) => show(v, id); window.clauduoLogout = () => $('logout').click(); window.clauduoKind = k => setKind(k);
+window.clauduoNav = (v, id) => show(v, id); window.clauduoWs = id => select(id); window.clauduoLogout = () => $('logout').click(); window.clauduoKind = k => setKind(k);
 
 function show(v, thread) {
   view = v; cur = v === 'thread' ? thread : null; turnKey = ''; if (v === 'agent') { agentCur = thread; agentKey = ''; }
-  for (const [n, id] of [['home', 'home'], ['thread', 'thread'], ['room', 'room'], ['files', 'filesView'], ['team', 'teamView'], ['search', 'searchView'], ['artifacts', 'artifactsView'], ['schedule', 'scheduleView'], ['custom', 'customView'], ['agent', 'agentView']]) $(id).hidden = n !== v;
-  for (const [b, n] of [['navNew', 'home'], ['navRoom', 'room'], ['navFiles', 'files'], ['navTeam', 'team'], ['navSearch', 'search'], ['navArtifacts', 'artifacts'], ['navSchedule', 'schedule'], ['navCustom', 'custom']]) $(b).classList.toggle('on', n === v);
+  for (const [n, id] of [['home', 'home'], ['thread', 'thread'], ['room', 'room'], ['files', 'filesView'], ['team', 'teamView'], ['search', 'searchView'], ['artifacts', 'artifactsView'], ['schedule', 'scheduleView'], ['custom', 'customView'], ['agent', 'agentView'], ['workspaces', 'wsView']]) $(id).hidden = n !== v;
+  for (const [b, n] of [['navNew', 'home'], ['navRoom', 'room'], ['navFiles', 'files'], ['navTeam', 'team'], ['navSearch', 'search'], ['navArtifacts', 'artifacts'], ['navSchedule', 'schedule'], ['navCustom', 'custom'], ['navWs', 'workspaces']]) $(b).classList.toggle('on', n === v);
   $('side').classList.remove('open'); listKey = '';
   pushNative();
   if (state) { renderList(); if (v === 'thread') refreshThread().catch(() => {}); }
@@ -176,11 +183,21 @@ function renderList() {
   const list = state.threads.filter(t => t.kind === kind), key = JSON.stringify([list, cur]);
   if (key === listKey) return; listKey = key;
   $('kindChat').classList.toggle('on', kind === 'chat'); $('kindCode').classList.toggle('on', kind === 'code');
-  $('threads').replaceChildren(...(list.length ? list.map(t => {
+  const item = t => {
     const b = el('button', 'th' + (t.id === cur ? ' on' : '')); if (t.busy) b.append(el('span', 'dot'));
     b.append(el('span', 't', t.title), el('span', 'env', t.env === 'local' ? '로컬' : '클라우드')); b.title = `${t.author} · ${t.agent}${t.folder ? ' · ' + t.folder : ''}`;
     b.onclick = () => show('thread', t.id); return b;
-  }) : [el('div', 'sys', '아직 작업이 없어요.')]));
+  };
+  if (!list.length) return $('threads').replaceChildren(el('div', 'sys', '아직 작업이 없어요.'));
+  if (kind === 'chat') return $('threads').replaceChildren(...list.map(item));
+  const groups = new Map(); // 최근 작업 순서를 유지한다
+  for (const t of list) { const n = t.project || (t.env === 'cloud' ? '공유 작업공간' : '기타'); groups.set(n, [...(groups.get(n) || []), t]); }
+  $('threads').replaceChildren(...[...groups].map(([name, items], i) => {
+    const d = el('details', 'proj'), s = el('summary'); s.append(el('span', 't', name), el('span', 'env', String(items.length))); d.append(s, ...items.map(item));
+    d.open = projectOpen.get(name) ?? (i < 3 || items.some(t => t.id === cur));
+    d.ontoggle = () => projectOpen.set(name, d.open);
+    return d;
+  }));
 }
 
 function renderEnv() {
@@ -200,7 +217,7 @@ function renderMsg(m) {
   $('logEmpty')?.remove();
   const box = $('logScroll'), stick = box.scrollHeight - box.scrollTop - box.clientHeight < 80;
   if (m.author === 'system') $('log').append(el('div', 'sys', m.text));
-  else if (m.kind === 'change') { const d = el('div', 'act'), b = el('button', 'link', '되돌리기'); d.append(el('span', '', `${m.author} · ${m.text}`), b); b.onclick = guard(async () => { await api('POST', w('/revert'), { hist: m.hist }); tick(); }); $('log').append(d); }
+  else if (m.kind === 'change') { const d = el('div', 'act'), b = el('button', 'link', '되돌리기'); b.hidden = !m.hist; d.append(el('span', '', `${m.author} · ${m.text}`), b); b.onclick = guard(async () => { await api('POST', w('/revert'), { hist: m.hist }); tick(); }); $('log').append(d); }
   else { const d = el('div', 'msg' + (m.kind === 'error' ? ' err' : '')), c = el('div', 'body'); c.append(el('b', '', m.author), el('time', '', new Date(m.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })), el('p', '', m.text)); d.append(avatar(m.author), c); $('log').append(d); }
   if (stick) box.scrollTop = box.scrollHeight;
 }
@@ -306,8 +323,14 @@ async function tick() {
   if (view === 'agent') await renderAgent();
   if (view === 'files' && s.changes !== lastChanges) { lastChanges = s.changes; await refreshFiles(); }
 }
+function renderWs() {
+  const curWs = wsList.find(x => x.id === ws); $('wsCurrent').textContent = curWs?.name || '워크스페이스'; $('homeWs').textContent = curWs ? `${curWs.name}${curWs.role === 'owner' ? '' : ' · 초대받은 워크스페이스'}` : '';
+  const item = x => { const b = el('button', 'res'); b.append(el('b', '', x.name + (x.id === ws ? ' ✓' : '')), el('small', '', x.id === ws ? '지금 작업 중' : '눌러서 전환')); b.onclick = () => select(x.id); return b; };
+  const list = (r, id, none) => { const l = wsList.filter(r); $(id).replaceChildren(...(l.length ? l.map(item) : [el('div', 'empty', none)])); };
+  list(x => x.role === 'owner', 'wsMine', '아직 없어요.'); list(x => x.role !== 'owner', 'wsInvited', '아직 초대받은 곳이 없어요.');
+}
 function select(id) {
-  ws = id; store.set('clauduo.ws', id); since = 0; peopleKey = envKey = listKey = ''; lastChanges = -1; state = null; gen++; closeFile(); $('log').replaceChildren(); $('wsSel').value = id; show('home'); clearTimeout(timer);
+  ws = id; store.set('clauduo.ws', id); since = 0; peopleKey = envKey = listKey = ''; lastChanges = -1; state = null; gen++; closeFile(); $('log').replaceChildren(); renderWs(); show('home'); clearTimeout(timer);
   const g = gen, loop = () => (document.hidden ? Promise.resolve() : tick()).catch(e => { if (e.status === 401 || e.status === 404) return boot(); }).finally(() => { if (g === gen) timer = setTimeout(loop, view === 'thread' && state?.threads.find(t => t.id === cur)?.busy ? 1500 : 3000); });
   loop();
 }
@@ -316,7 +339,7 @@ async function boot(prefer) {
   try { info = await api('GET', '/api/me'); } catch (e) { if (e.status === 401) { if (pendingInvite) $('authMsg').textContent = '초대를 받으셨어요. 이메일로 로그인하면 바로 참여돼요.'; return screen('auth'); } throw e; }
   if (pendingInvite) { const t = pendingInvite; pendingInvite = null; try { prefer = (await api('POST', '/api/invites/accept', { token: t })).workspace; info = await api('GET', '/api/me'); } catch (e) { alert(e.message); } }
   wsList = info.workspaces; if (!wsList.length) return screen('first');
-  $('wsSel').replaceChildren(...wsList.map(x => Object.assign(el('option', '', x.name), { value: x.id }))); screen('app');
+  screen('app');
   const saved = prefer || store.get('clauduo.ws'); select(wsList.some(x => x.id === saved) ? saved : wsList[0].id);
 }
 
@@ -343,6 +366,22 @@ $('joinForm').onsubmit = async e => {
   pendingInvite = t; $('joinDlg').close();
   boot().catch(x => alert(x.message)); // 로그인 전이면 로그인 후 자동으로 참여한다
 };
+const b64 = f => new Promise((ok, no) => { const r = new FileReader(); r.onload = () => ok(String(r.result).split(',')[1] || ''); r.onerror = () => no(r.error); r.readAsDataURL(f); });
+async function upload(files) {
+  const list = [...files].filter(f => !(f.webkitRelativePath || f.name).split('/').some(x => ['node_modules', '.git', '.DS_Store', '.claude'].includes(x)));
+  const hidden = files.length - list.length; let done = 0, big = 0, failed = 0, stop = '';
+  for (const f of list) {
+    $('cur').textContent = `업로드 중 ${done + big + failed + 1}/${list.length}`;
+    if (f.size > 1.9e6) { big++; continue; }
+    try { await api('PUT', w('/file'), { path: f.webkitRelativePath || f.name, data: await b64(f), upload: true }); done++; }
+    catch (e) { failed++; if (e.status === 413) { stop = e.message; break; } }
+  }
+  await api('POST', w('/upload-done'), { count: done });
+  closeFile(); await refreshFiles(); tick().catch(() => {});
+  $('cur').textContent = `${done}개 업로드됨` + (big ? ` · 1.9MB 초과 ${big}개 제외` : '') + (hidden ? ` · 시스템 폴더 ${hidden}개 제외` : '') + (failed ? ` · 실패 ${failed}개` : '') + (stop ? ` · ${stop}` : '');
+}
+$('upFiles').onclick = () => $('fileIn').click(); $('upDir').onclick = () => $('dirIn').click();
+for (const id of ['fileIn', 'dirIn']) $(id).onchange = guard(async e => { const f = [...e.target.files]; e.target.value = ''; if (f.length) await upload(f); });
 const enter = (ta, f) => ta.onkeydown = e => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && e.keyCode !== 229) { e.preventDefault(); f.requestSubmit(); } };
 enter($('newText'), $('newForm')); enter($('turnText'), $('turnForm')); enter($('text'), $('send'));
 function openAdd() { $('agentDlg').showModal(); }
@@ -358,9 +397,8 @@ $('newForm').onsubmit = guard(async e => {
 $('turnForm').onsubmit = guard(async e => { e.preventDefault(); if (state.threads.find(x => x.id === cur)?.busy) { await api('POST', w(`/threads/${cur}/cancel`)); return; } const text = $('turnText').value.trim(); if (!text) return; await api('POST', w(`/threads/${cur}/messages`), { text }); $('turnText').value = ''; turnKey = ''; await tick(); });
 $('tDel').onclick = guard(async () => { if (!confirm('이 작업 기록을 삭제할까요?')) return; await api('DELETE', w('/threads/' + cur)); await tick(); show('home'); });
 $('send').onsubmit = guard(async e => { e.preventDefault(); const text = $('text').value; if (!text.trim()) return; $('text').value = ''; await api('POST', w('/messages'), { text }); tick(); });
-$('navNew').onclick = () => show('home'); $('navRoom').onclick = () => show('room'); $('navFiles').onclick = () => show('files'); $('navTeam').onclick = () => show('team');
+$('navWs').onclick = () => show('workspaces'); $('navNew').onclick = () => show('home'); $('navRoom').onclick = () => show('room'); $('navFiles').onclick = () => show('files'); $('navTeam').onclick = () => show('team');
 $('menuBtn').onclick = () => $('side').classList.toggle('open');
-$('wsSel').onchange = () => select($('wsSel').value);
 $('logout').onclick = guard(async () => { await api('POST', '/api/auth/logout'); gen++; clearTimeout(timer); screen('auth'); });
 $('authForm').onsubmit = async e => { e.preventDefault(); $('err').textContent = ''; try { await api('POST', '/api/auth/request', { email: $('email').value, invite: pendingInvite || undefined }); $('sentTo').textContent = $('email').value; screen('sent'); } catch (x) { $('err').textContent = x.message; } };
 $('codeForm').onsubmit = async e => { e.preventDefault(); $('codeErr').textContent = ''; try { await api('POST', '/api/auth/verify', { email: $('email').value, code: $('code').value }); await boot(); } catch (x) { $('codeErr').textContent = x.message; } };
