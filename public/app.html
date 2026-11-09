@@ -41,6 +41,7 @@ html.native #side,html.native #menuBtn { display: none !important; } html.native
 .res { display: block; width: 100%; text-align: left; border: 0; border-bottom: 1px solid var(--line); border-radius: 0; padding: 10px 4px; font-weight: 400; } .res b { font-weight: 550; display: block; } .res small { color: var(--dim); display: block; overflow-wrap: anywhere; } #preview { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; overflow: auto; padding: 12px; color: var(--dim); } #preview img, #preview video { max-width: 100%; max-height: 100%; } #preview iframe { width: 100%; height: 100%; border: 0; } #frame { flex: 1; width: 100%; min-height: 0; border: 0; background: #fff; } #custom { width: 100%; min-height: 200px; resize: vertical; background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 12px; } .form { display: flex; flex-direction: column; gap: 8px; margin-bottom: 20px; } .form textarea { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 10px; resize: vertical; min-height: 70px; } .form .bar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; } .form select,.form input { min-width: 0; } h2.t { font-size: 20px; font-weight: 600; margin: 0 0 14px; }
 .md { overflow-wrap: anywhere; } .md p { margin: 0 0 10px; white-space: pre-wrap; } .md > :last-child { margin-bottom: 0; } .md h3,.md h4,.md h5,.md h6 { margin: 14px 0 6px; font-size: 16px; font-weight: 650; } .md ul,.md ol { margin: 0 0 10px; padding-left: 22px; } .md pre { margin: 8px 0 12px; max-height: 480px; } .md code { display: inline; background: var(--hover); padding: 1px 5px; border-radius: 5px; font-size: .88em; user-select: text; } .md a { color: var(--accent); }
 .proj { flex: none; } .proj > summary { display: flex; gap: 8px; align-items: center; padding: 5px 9px; font-size: 12.5px; font-weight: 600; color: var(--dim); cursor: pointer; border-radius: 8px; } .proj > summary:hover { background: var(--hover); } .proj > summary .t { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; } .proj .th { padding-left: 16px; }
+.board { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 12px; align-items: start; } .lane { background: var(--side); border-radius: 12px; padding: 10px; display: flex; flex-direction: column; gap: 8px; } .lane h3 { margin: 0; font-size: 13px; font-weight: 600; color: var(--dim); } .task { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 10px; display: flex; flex-direction: column; gap: 8px; } .task p { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; } .task small { color: var(--dim); font-size: 12px; } .task .bar { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; } .task select { padding: 3px 6px; font-size: 13px; min-width: 0; max-width: 100%; } .task button { padding: 3px 8px; font-size: 13px; } .task .rm { margin-left: auto; padding: 3px; } @media (max-width: 760px) { .board { grid-template-columns: minmax(0,1fr); } .col > h2.t:first-child { padding-left: 34px; } }
 #menuBtn { display: none; border: 0; padding: 6px; } @media (max-width: 760px) { #app { grid-template-columns: minmax(0,1fr); } #side { display: none; position: fixed; inset: 0 20% 0 0; z-index: 5; box-shadow: 0 0 30px rgb(0 0 0 / .3); } #side.open { display: flex; } #menuBtn { display: inline-flex; position: fixed; top: 9px; left: 9px; z-index: 4; background: var(--bg); } .thead { padding-left: 50px; } #home { padding-top: 40px; } #filesView { flex-direction: column; } #files { width: auto; max-height: 28dvh; border-right: 0; border-bottom: 1px solid var(--line); } }
 </style>
 </head>
@@ -55,6 +56,7 @@ html.native #side,html.native #menuBtn { display: none !important; } html.native
   <symbol id="art" viewBox="0 0 24 24"><rect x="4" y="6" width="12" height="15" rx="2"/><path d="M8 6V5a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-2"/></symbol>
   <symbol id="clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></symbol>
   <symbol id="sliders" viewBox="0 0 24 24"><path d="M4 7h10M18 7h2M4 17h2M10 17h10"/><circle cx="16" cy="7" r="2"/><circle cx="8" cy="17" r="2"/></symbol>
+  <symbol id="tasks" viewBox="0 0 24 24"><path d="m4 7 2 2 3-4M4 16l2 2 3-4M13 8h7M13 17h7"/></symbol>
   <symbol id="menu" viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h16"/></symbol>
 </svg>
 
@@ -77,6 +79,7 @@ html.native #side,html.native #menuBtn { display: none !important; } html.native
       <button id="navArtifacts"><svg class="i"><use href="#art"/></svg>아티팩트</button>
       <button id="navSchedule"><svg class="i"><use href="#clock"/></svg>예약</button>
       <button id="navCustom"><svg class="i"><use href="#sliders"/></svg>맞춤 설정</button>
+      <button id="navTasks"><svg class="i"><use href="#tasks"/></svg>팀 작업</button>
       <button id="navRoom"><svg class="i"><use href="#chat"/></svg>팀 대화</button>
       <button id="navFiles"><svg class="i"><use href="#file"/></svg>공유 파일</button>
       <button id="navTeam"><svg class="i"><use href="#team"/></svg>Claude와 팀원</button>
@@ -98,6 +101,9 @@ html.native #side,html.native #menuBtn { display: none !important; } html.native
       <div class="scroll" id="logScroll"><div class="col" id="log"></div></div>
       <div class="composer"><div class="col"><form class="box" id="send"><textarea id="text" placeholder="@이름 으로 호출" aria-label="메시지" style="min-height:36px"></textarea><div class="boxbar"><span class="e" id="status" role="status"></span><button class="send">전송</button></div></form></div></div>
     </section>
+    <section class="view" id="tasksView" hidden><div class="scroll"><div class="col" style="max-width:1100px"><h2 class="t">팀 작업</h2>
+      <form class="form" id="taskForm"><div class="bar"><input id="taskTitle" required maxlength="2000" placeholder="할 일" aria-label="할 일" style="flex:1 1 220px"><select id="taskWho" aria-label="담당자"></select><button class="p">추가</button></div><div class="bar"><label for="taskEnv" style="font-size:13px;color:var(--dim)">맡길 Claude</label><select id="taskEnv"></select></div></form>
+      <div class="board" id="board"></div></div></div></section>
     <section class="view" id="filesView" hidden>
       <div id="files"></div>
       <div id="editWrap"><div class="fbar"><span id="cur">파일을 선택하세요</span><input id="newPath" placeholder="폴더/새파일.md" aria-label="새 파일 경로"><button id="newBtn">새 파일</button><button id="upFiles">파일 업로드</button><button id="upDir">폴더 업로드</button><input id="fileIn" type="file" multiple hidden><input id="dirIn" type="file" webkitdirectory multiple hidden><button id="del" disabled>삭제</button><button class="p" id="save" disabled>저장</button></div><div id="preview" hidden></div><textarea id="editor" disabled aria-label="파일 내용"></textarea></div>
@@ -142,7 +148,7 @@ const bridge = window.webkit?.messageHandlers?.clauduo;
 function store0(k) { try { return localStorage[k]; } catch { return null; } }
 if (bridge) document.documentElement.classList.add('native');
 const projectOpen = new Map();
-let agentCur = null, agentKey = '', pendingArt = null, nativeKey = '', kind = store0('clauduo.kind') === 'chat' ? 'chat' : 'code';
+let taskKey = '', agentCur = null, agentKey = '', pendingArt = null, nativeKey = '', kind = store0('clauduo.kind') === 'chat' ? 'chat' : 'code';
 function pushNative(signedIn = true) { if (!bridge) return; const m = JSON.stringify({ signedIn, view, cur, ws, kind, workspaces: wsList.map(x => ({ id: x.id, name: x.name, role: x.role })), agent: agentCur, agents: (state?.agents || []).map(a => ({ id: a.id, name: a.name, mode: a.mode, online: a.online, mine: a.mine })), email: me?.email || '', threads: (state?.threads || []).map(t => ({ id: t.id, title: t.title, env: t.env, kind: t.kind, busy: t.busy, project: t.project })) }); if (m !== nativeKey) { nativeKey = m; bridge.postMessage(m); } }
 const store = { get: k => { try { return localStorage[k]; } catch {} }, set: (k, v) => { try { localStorage[k] = v; } catch {} } };
 let pendingInvite = hash.get('invite'), ws, wsList = [], since = 0, gen = 0, timer, me, state, view = 'home', cur = null, turnKey = '', listKey = '', peopleKey = '', envKey = '', lastChanges = -1, fileKey = '', openPath = null, base;
@@ -160,8 +166,8 @@ window.clauduoNav = (v, id) => show(v, id); window.clauduoWs = id => select(id);
 
 function show(v, thread) {
   view = v; cur = v === 'thread' ? thread : null; turnKey = ''; if (v === 'agent') { agentCur = thread; agentKey = ''; }
-  for (const [n, id] of [['home', 'home'], ['thread', 'thread'], ['room', 'room'], ['files', 'filesView'], ['team', 'teamView'], ['search', 'searchView'], ['artifacts', 'artifactsView'], ['schedule', 'scheduleView'], ['custom', 'customView'], ['agent', 'agentView'], ['workspaces', 'wsView']]) $(id).hidden = n !== v;
-  for (const [b, n] of [['navNew', 'home'], ['navRoom', 'room'], ['navFiles', 'files'], ['navTeam', 'team'], ['navSearch', 'search'], ['navArtifacts', 'artifacts'], ['navSchedule', 'schedule'], ['navCustom', 'custom'], ['navWs', 'workspaces']]) $(b).classList.toggle('on', n === v);
+  for (const [n, id] of [['home', 'home'], ['thread', 'thread'], ['room', 'room'], ['tasks', 'tasksView'], ['files', 'filesView'], ['team', 'teamView'], ['search', 'searchView'], ['artifacts', 'artifactsView'], ['schedule', 'scheduleView'], ['custom', 'customView'], ['agent', 'agentView'], ['workspaces', 'wsView']]) $(id).hidden = n !== v;
+  for (const [b, n] of [['navNew', 'home'], ['navRoom', 'room'], ['navTasks', 'tasks'], ['navFiles', 'files'], ['navTeam', 'team'], ['navSearch', 'search'], ['navArtifacts', 'artifacts'], ['navSchedule', 'schedule'], ['navCustom', 'custom'], ['navWs', 'workspaces']]) $(b).classList.toggle('on', n === v);
   $('side').classList.remove('open'); listKey = '';
   pushNative();
   if (state) { renderList(); if (v === 'thread') refreshThread().catch(() => {}); }
@@ -204,6 +210,7 @@ function renderEnv() {
   const opts = state.agents.flatMap(a => a.mode === 'api' ? [{ v: JSON.stringify({ agentId: a.id }), t: `☁︎ 클라우드 · ${a.name}` }] : kind === 'chat' ? [{ v: JSON.stringify({ agentId: a.id, w: 1 }), t: `▣ ${a.name}` + (a.online ? '' : ' (오프라인)') }] : a.folders.map(f => ({ v: JSON.stringify({ agentId: a.id, folder: f, w: 1 }), t: `▣ ${a.name} · ${f.split('/').pop()}` + (a.online ? '' : ' (오프라인)') })));
   const key = JSON.stringify(opts); if (key === envKey) return; envKey = key;
   $('schEnv').replaceChildren(...opts.map(o => Object.assign(el('option', '', o.t), { value: o.v })));
+  const keepTask = $('taskEnv').value; $('taskEnv').replaceChildren(...opts.map(o => Object.assign(el('option', '', o.t), { value: o.v }))); if (opts.some(o => o.v === keepTask)) $('taskEnv').value = keepTask;
   $('homeTitle').textContent = kind === 'chat' ? '무엇이 궁금하세요?' : '무엇을 함께 할까요?'; $('newText').placeholder = kind === 'chat' ? 'Claude에게 물어보세요' : '작업을 설명해 주세요';
   const keep = $('envSel').value || store.get('clauduo.env');
   const sel = opts.map(o => Object.assign(el('option', '', o.t), { value: o.v }));
@@ -319,6 +326,32 @@ function renderPeople() {
   }), `${m.name} 내보내기`)));
 }
 
+const LANES = [['todo', '할 일'], ['doing', '진행 중'], ['done', '완료']];
+const fill = (s, list, value) => { s.replaceChildren(...list.map(([v, t]) => Object.assign(el('option', '', t), { value: v }))); s.value = value; };
+const patchTask = (id, b) => guard(async () => { try { await api('PATCH', w('/tasks/' + id), b); } finally { taskKey = ''; await tick(); } })();
+function renderTasks() {
+  const names = [...state.members, ...state.agents].map(x => x.name), th = new Map(state.threads.map(t => [t.id, t]));
+  const key = JSON.stringify([state.tasks.map(t => [t, th.get(t.thread_id)?.busy, th.has(t.thread_id)]), names]); if (key === taskKey) return; taskKey = key;
+  const who = extra => [['', '담당자 없음'], ...[...new Set([...names, ...(extra ? [extra] : [])])].map(n => [n, n])];
+  const keep = $('taskWho').value; fill($('taskWho'), who(), names.includes(keep) ? keep : '');
+  $('board').replaceChildren(...LANES.map(([status, label]) => {
+    const list = state.tasks.filter(t => t.status === status), lane = el('div', 'lane'); lane.append(el('h3', '', `${label} ${list.length}`));
+    if (!list.length) lane.append(el('div', 'sys', '비어 있어요.'));
+    for (const t of list) {
+      const c = el('div', 'task'), bar = el('div', 'bar'), st = el('select'), as = el('select'), thread = th.get(t.thread_id);
+      fill(st, LANES, t.status); st.ariaLabel = '상태'; st.onchange = () => patchTask(t.id, { status: st.value });
+      fill(as, who(t.assignee), t.assignee || ''); as.ariaLabel = '담당자'; as.onchange = () => patchTask(t.id, { assignee: as.value });
+      bar.append(st, as);
+      const go = el('button', '', thread ? (thread.busy ? '작업 중 · 열기' : '작업 열기') : 'Claude에게 맡기기');
+      go.onclick = thread ? () => goThread(thread) : guard(async () => { if (!$('taskEnv').value) { alert('먼저 Claude를 추가해 주세요.'); return; } const { id } = await api('POST', w('/threads'), { text: t.title, ...JSON.parse($('taskEnv').value), kind, taskId: t.id }); await tick(); goThread(state.threads.find(x => x.id === id)); });
+      bar.append(go);
+      if (t.removable) { const b = el('button', 'rm'); b.append(icon('trash')); b.title = b.ariaLabel = '팀 작업 삭제'; b.onclick = guard(async () => { if (confirm('이 팀 작업을 삭제할까요?')) { await api('DELETE', w('/tasks/' + t.id)); await tick(); } }); bar.append(b); }
+      c.append(el('p', '', t.title), el('small', '', `${t.author} 님이 추가`), bar); lane.append(c);
+    }
+    return lane;
+  }));
+}
+
 async function tick() {
   const g = gen, s = await api('GET', w('/state?since=') + since);
   if (g !== gen) return;
@@ -326,7 +359,7 @@ async function tick() {
   if (!$('log').children.length) $('log').append(Object.assign(el('div', 'empty', '@이름으로 Claude를 불러보세요.'), { id: 'logEmpty' }));
   $('meEmail').textContent = me.email; const owner = me.role === 'owner'; $('invOpen').hidden = !owner; $('wsDel').hidden = !owner;
   $('macBox').hidden = !bridge;
-  renderList(); renderEnv(); renderPeople(); pushNative();
+  renderList(); renderEnv(); renderPeople(); renderTasks(); pushNative();
   $('status').textContent = s.running.length ? `${s.running.join(', ')} 작업 중` + (s.queued.length ? ` · 대기 ${s.queued.join(', ')}` : '') : s.queued.length ? `대기: ${s.queued.join(', ')}` : '';
   if (view === 'thread') await refreshThread();
   if (view === 'agent') await renderAgent();
@@ -339,7 +372,7 @@ function renderWs() {
   list(x => x.role === 'owner', 'wsMine', '아직 없어요.'); list(x => x.role !== 'owner', 'wsInvited', '아직 초대받은 곳이 없어요.');
 }
 function select(id) {
-  ws = id; store.set('clauduo.ws', id); since = 0; peopleKey = envKey = listKey = ''; lastChanges = -1; state = null; gen++; closeFile(); $('log').replaceChildren(); renderWs(); show('home'); clearTimeout(timer);
+  ws = id; store.set('clauduo.ws', id); since = 0; peopleKey = envKey = listKey = taskKey = ''; lastChanges = -1; state = null; gen++; closeFile(); $('log').replaceChildren(); renderWs(); show('home'); clearTimeout(timer);
   const g = gen, loop = () => (document.hidden ? Promise.resolve() : tick()).catch(e => { if (e.status === 401 || e.status === 404) return boot(); }).finally(() => { if (g === gen) timer = setTimeout(loop, view === 'thread' && state?.threads.find(t => t.id === cur)?.busy ? 1500 : 3000); });
   loop();
 }
@@ -360,6 +393,7 @@ async function openArt(a) { artCur = a.shared ? null : a.id; $('artTitle').textC
 async function loadArts() { artMode(false); const f = $('artFilter').value, list = (await api('GET', w('/artifacts'))).filter(a => !f || a.source === f); $('arts').replaceChildren(...(list.length ? list.map(a => { const b = el('button', 'res'); b.append(el('b', '', a.title), el('small', '', [a.source === 'local' ? '로컬' : '클라우드', a.author, a.updated_at ? new Date(a.updated_at).toLocaleString() : ''].filter(Boolean).join(' · '))); b.onclick = guard(() => openArt(a)); return b; }) : [el('div', 'empty', '아직 아티팩트가 없어요. Claude에게 HTML 페이지를 만들어 달라고 해보세요.')])); if (pendingArt) { const a = pendingArt; pendingArt = null; await openArt(a); } }
 $('agMention').onclick = () => { const n = agentCur; show('room'); $('text').value += `@${n} `; $('text').focus(); };
 $('artBack').onclick = () => loadArts(); $('artFilter').onchange = () => loadArts(); $('artDel').onclick = guard(async () => { if (!confirm('이 아티팩트를 삭제할까요?')) return; await api('DELETE', w('/artifacts/' + artCur)); await loadArts(); });
+$('taskForm').onsubmit = guard(async e => { e.preventDefault(); const title = $('taskTitle').value.trim(); if (!title) return; await api('POST', w('/tasks'), { title, assignee: $('taskWho').value }); $('taskTitle').value = ''; await tick(); });
 async function loadSch() { const list = await api('GET', w('/schedules')); const every = { 60: '매시간', 1440: '매일', 10080: '매주' }; $('schList').replaceChildren(...(list.length ? list.map(s => { const r = el('div', 'row'), n = el('div', 'n'); n.append(el('b', '', s.title), el('small', '', `${every[s.interval_min]} · 다음 ${new Date(s.next_at).toLocaleString()}${s.enabled ? '' : ' · 중지됨'}`)); r.append(n); if (s.mine || me.role === 'owner') { const b = el('button', 'rm'); b.append(icon('trash')); b.title = b.ariaLabel = '예약 삭제'; b.onclick = guard(async () => { await api('DELETE', w('/schedules/' + s.id)); loadSch(); }); r.append(b); } return r; }) : [el('div', 'empty', '아직 예약이 없어요.')])); }
 $('schForm').onsubmit = guard(async e => { e.preventDefault(); if (!$('schEnv').value) { alert('먼저 Claude를 추가해 주세요.'); return; } await api('POST', w('/schedules'), { prompt: $('schPrompt').value, ...JSON.parse($('schEnv').value), kind, interval: +$('schEvery').value, nextAt: new Date($('schAt').value).getTime() }); $('schPrompt').value = ''; loadSch(); });
 $('customSave').onclick = guard(async () => { await api('POST', w('/instructions'), { text: $('custom').value }); $('customSave').textContent = '저장됨'; setTimeout(() => $('customSave').textContent = '저장', 1200); });
@@ -406,7 +440,7 @@ $('newForm').onsubmit = guard(async e => {
 $('turnForm').onsubmit = guard(async e => { e.preventDefault(); if (state.threads.find(x => x.id === cur)?.busy) { await api('POST', w(`/threads/${cur}/cancel`)); return; } const text = $('turnText').value.trim(); if (!text) return; await api('POST', w(`/threads/${cur}/messages`), { text }); $('turnText').value = ''; turnKey = ''; await tick(); });
 $('tDel').onclick = guard(async () => { if (!confirm('이 작업 기록을 삭제할까요?')) return; await api('DELETE', w('/threads/' + cur)); await tick(); show('home'); });
 $('send').onsubmit = guard(async e => { e.preventDefault(); const text = $('text').value; if (!text.trim()) return; $('text').value = ''; await api('POST', w('/messages'), { text }); tick(); });
-$('navWs').onclick = () => show('workspaces'); $('navNew').onclick = () => show('home'); $('navRoom').onclick = () => show('room'); $('navFiles').onclick = () => show('files'); $('navTeam').onclick = () => show('team');
+$('navWs').onclick = () => show('workspaces'); $('navNew').onclick = () => show('home'); $('navRoom').onclick = () => show('room'); $('navTasks').onclick = () => show('tasks'); $('navFiles').onclick = () => show('files'); $('navTeam').onclick = () => show('team');
 $('menuBtn').onclick = () => $('side').classList.toggle('open');
 $('logout').onclick = guard(async () => { await api('POST', '/api/auth/logout'); gen++; clearTimeout(timer); screen('auth'); });
 $('authForm').onsubmit = async e => { e.preventDefault(); $('err').textContent = ''; try { await api('POST', '/api/auth/request', { email: $('email').value, invite: pendingInvite || undefined }); $('sentTo').textContent = $('email').value; screen('sent'); } catch (x) { $('err').textContent = x.message; } };

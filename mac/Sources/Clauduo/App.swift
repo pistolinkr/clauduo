@@ -277,6 +277,7 @@ struct Sidebar: View {
                 Label("예약", systemImage: "clock").tag(Destination.view("schedule"))
                 Label("맞춤 설정", systemImage: "slider.horizontal.3").tag(Destination.view("custom"))
                 Label("워크스페이스", systemImage: "square.stack").tag(Destination.view("workspaces"))
+                Label("팀 작업", systemImage: "checklist").tag(Destination.view("tasks"))
                 Label("팀 대화", systemImage: "bubble.left.and.bubble.right").tag(Destination.view("room"))
                 Label("공유 파일", systemImage: "folder").tag(Destination.view("files"))
                 Label("Claude와 팀원", systemImage: "person.2").tag(Destination.view("team"))

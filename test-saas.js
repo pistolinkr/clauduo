@@ -352,6 +352,22 @@ const mock = http.createServer(async (req, res) => {
     assert.equal((await A('DELETE', W('/schedules/' + sch.j.id))).s, 200);
     assert.equal((await A('DELETE', W('/threads/' + ct))).s, 200);
 
+    // 팀 작업: 팀원 누구나 옮기고 Claude에게 맡길 수 있다
+    assert.equal((await A('POST', W('/tasks'), { title: 'x', assignee: 'nobody' })).s, 400, 'unknown assignee');
+    assert.equal((await A('POST', W('/tasks'), { title: ' ' })).s, 400, 'empty task');
+    const task = (await A('POST', W('/tasks'), { title: 'chat-only 정리', assignee: 'ap' })).j.id;
+    const taskOf = async () => (await B('GET', W('/state'))).j.tasks.find(t => t.id === task);
+    assert.equal((await B('PATCH', W('/tasks/' + task), { status: 'nope' })).s, 400, 'bad status');
+    assert.equal((await B('PATCH', W('/tasks/' + task), { status: 'done', assignee: '' })).s, 200, 'member moves task');
+    let tk = await taskOf(); assert(tk.status === 'done' && tk.assignee === null && !tk.removable, 'task updated');
+    assert.equal((await B('DELETE', W('/tasks/' + task))).s, 403, 'only creator deletes task');
+    const taskRun = (await B('POST', W('/threads'), { text: 'chat-only', agentId: state.agents.find(a => a.name === 'ap').id, kind: 'chat', taskId: task })).j.id;
+    tk = await taskOf(); assert(tk.thread_id === taskRun && tk.status === 'doing' && tk.assignee === 'ap', 'task linked to thread');
+    assert.equal((await B('POST', W('/threads'), { text: 'again', agentId: state.agents.find(a => a.name === 'ap').id, kind: 'chat', taskId: task })).s, 409, 'task runs once');
+    assert.equal((await B('DELETE', W('/threads/' + taskRun))).s, 200);
+    assert.equal((await taskOf()).thread_id, null, 'deleting thread unlinks task');
+    assert.equal((await A('DELETE', W('/tasks/' + task))).s, 200);
+
     // 제거
     const wk = state.agents.find(a => a.name === 'wk'), ap = state.agents.find(a => a.name === 'ap');
     const bMember = state.members.find(m => m.role === 'member');

@@ -120,6 +120,7 @@ export class Workspace extends DurableObject {
       CREATE TABLE IF NOT EXISTS artifacts (id TEXT PRIMARY KEY, thread_id TEXT, title TEXT NOT NULL, html TEXT NOT NULL, author TEXT NOT NULL, updated_at INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS schedules (id TEXT PRIMARY KEY, title TEXT NOT NULL, prompt TEXT NOT NULL, agent_id TEXT NOT NULL, folder TEXT, kind TEXT NOT NULL, model TEXT, mode TEXT, interval_min INTEGER NOT NULL, next_at INTEGER NOT NULL, enabled INTEGER NOT NULL DEFAULT 1, created_by TEXT NOT NULL, author TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS tasks (id TEXT PRIMARY KEY, title TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'todo', assignee TEXT, thread_id TEXT, created_by TEXT NOT NULL, author TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS thread_messages (id INTEGER PRIMARY KEY AUTOINCREMENT, thread_id TEXT NOT NULL, role TEXT NOT NULL, text TEXT NOT NULL, files TEXT NOT NULL DEFAULT '[]', created_at INTEGER NOT NULL);
       CREATE INDEX IF NOT EXISTS thread_messages_t ON thread_messages (thread_id, id);
     `);
@@ -166,6 +167,13 @@ export class Workspace extends DurableObject {
     const next = this.one('SELECT MIN(next_at) AS n FROM schedules WHERE enabled=1').n; // 다음 예약 시각까지 알람을 맞춘다
     if (next != null) at = Math.min(at, next);
     if (at !== Infinity) this.ctx.storage.setAlarm(at);
+  }
+
+  async assignee(name) { // 담당자는 현재 팀원이나 Claude 이름만 받는다
+    if (!name) return null;
+    const n = String(name);
+    if (!this.one('SELECT 1 AS x FROM agents WHERE name=?', n) && !await this.env.DB.prepare('SELECT 1 FROM members WHERE workspace_id=? AND name=?').bind(this.wsId, n).first()) fail(400, '없는 담당자예요');
+    return n;
   }
 
   instructions() { return this.one(`SELECT value FROM meta WHERE key='instructions'`)?.value || ''; }
@@ -440,6 +448,7 @@ ${log.map(m => m.kind === 'change' ? `[변경] ${m.author}: ${m.text}` : `${m.au
         threads: this.all(`SELECT t.id, t.title, t.env, t.kind, t.project, t.agent, t.folder, t.author, t.updated_at, t.created_by, (SELECT 1 FROM jobs j WHERE j.thread_id=t.id LIMIT 1) AS busy FROM threads t WHERE t.imported=0 OR t.created_by=? OR t.agent_id IN ${SHARED_AGENTS} ORDER BY t.updated_at DESC LIMIT 500`, me.userId).map(({ created_by, ...t }) => ({ ...t, project: t.project || (t.folder && t.folder.split('/').pop()) || null, folder: t.folder && t.folder.split('/').pop(), busy: !!t.busy, mine: created_by === me.userId })),
         messages: this.all('SELECT * FROM (SELECT id, author, kind, text, hist, created_at FROM messages WHERE id>? ORDER BY id DESC LIMIT 300) ORDER BY id', since),
         changes: this.one(`SELECT count(*) AS n FROM messages WHERE kind='change'`).n,
+        tasks: this.all('SELECT id, title, status, assignee, thread_id, author, created_by FROM tasks ORDER BY rowid DESC LIMIT 500').map(({ created_by, ...t }) => ({ ...t, removable: owner || created_by === me.userId })),
         running: jobs.filter(j => j.status === 'running').map(j => j.name),
         queued: jobs.filter(j => j.status === 'queued').map(j => j.name),
       });
@@ -556,6 +565,32 @@ ${log.map(m => m.kind === 'change' ? `[변경] ${m.author}: ${m.text}` : `${m.au
       this.sql.exec('DELETE FROM schedules WHERE id=?', schedule[1]);
       return json(200, {});
     }
+    if (sub === '/tasks' && m === 'POST') {
+      const title = String(body.title || '').trim().slice(0, 2000);
+      if (!title) return json(400, { error: '할 일을 입력해 주세요' });
+      const assignee = await this.assignee(body.assignee);
+      if (this.one('SELECT count(*) AS n FROM tasks').n >= 500) return json(403, { error: '베타에서는 팀 작업을 500개까지 만들 수 있어요' });
+      const id = randomUUID();
+      this.sql.exec('INSERT INTO tasks (id, title, assignee, created_by, author) VALUES (?,?,?,?,?)', id, title, assignee, me.userId, me.name);
+      return json(200, { id });
+    }
+    const taskRoute = /^\/tasks\/([^/]+)$/.exec(sub);
+    if (taskRoute) {
+      const t = this.one('SELECT * FROM tasks WHERE id=?', taskRoute[1]);
+      if (!t) return json(404, { error: '없는 팀 작업이에요' });
+      if (m === 'DELETE') {
+        if (!owner && t.created_by !== me.userId) return json(403, { error: '만든 사람만 지울 수 있어요' });
+        this.sql.exec('DELETE FROM tasks WHERE id=?', t.id);
+        return json(200, {});
+      }
+      if (m === 'PATCH') {
+        const status = body.status ?? t.status;
+        if (!['todo', 'doing', 'done'].includes(status)) return json(400, { error: '상태를 확인해 주세요' });
+        const assignee = 'assignee' in body ? await this.assignee(body.assignee) : t.assignee;
+        this.sql.exec('UPDATE tasks SET status=?, assignee=? WHERE id=?', status, assignee, t.id);
+        return json(200, {});
+      }
+    }
     if (sub === '/threads' && m === 'POST') {
       const text = String(body.text || '').trim().slice(0, 20000);
       if (!text) return json(400, { error: '내용을 입력해 주세요' });
@@ -573,7 +608,11 @@ ${log.map(m => m.kind === 'change' ? `[변경] ${m.author}: ${m.text}` : `${m.au
       const model = ['opus', 'sonnet', 'haiku', 'fable'].includes(body.model) ? body.model : null;
       const mode = ['auto', 'acceptEdits', 'plan', 'bypassPermissions'].includes(body.mode) ? body.mode : 'auto';
       const effort = ['low', 'medium', 'high', 'xhigh', 'max'].includes(body.effort) ? body.effort : null;
+      const task = body.taskId && this.one('SELECT id, thread_id FROM tasks WHERE id=?', String(body.taskId));
+      if (body.taskId && !task) return json(404, { error: '없는 팀 작업이에요' });
+      if (task?.thread_id) return json(409, { error: '이미 맡긴 작업이에요' });
       const id = this.startThread({ text, agent: a, folder, kind, model, mode, effort, userId: me.userId, author: me.name });
+      if (task) this.sql.exec(`UPDATE tasks SET thread_id=?, assignee=?, status='doing' WHERE id=?`, id, a.name, task.id);
       this.kick();
       return json(200, { id });
     }
@@ -583,7 +622,7 @@ ${log.map(m => m.kind === 'change' ? `[변경] ${m.author}: ${m.text}` : `${m.au
       if (!t || (t.imported && t.created_by !== me.userId && !this.one('SELECT 1 AS x FROM agents WHERE id=? AND shared=1', t.agent_id))) return json(404, { error: '없는 작업이에요' }); // 공유 동의 전 세션은 본인에게만 보인다
       if (m === 'GET') { const j = this.one('SELECT status, progress FROM jobs WHERE thread_id=?', t.id); return json(200, { jobStatus: j?.status || null, model: t.model, mode: t.mode, effort: t.effort, progress: j?.progress ? JSON.parse(j.progress) : null, turns: this.all('SELECT id, role, text, files, tools, created_at FROM thread_messages WHERE thread_id=? ORDER BY id', t.id).map(x => ({ ...x, files: JSON.parse(x.files), tools: JSON.parse(x.tools) })) }); }
       if (t.created_by !== me.userId && !(m === 'DELETE' && owner)) return json(403, { error: '작업을 시작한 사람만 이어갈 수 있어요' });
-      if (m === 'DELETE') { this.sql.exec('DELETE FROM jobs WHERE thread_id=?', t.id); this.sql.exec('DELETE FROM thread_messages WHERE thread_id=?', t.id); this.sql.exec('DELETE FROM threads WHERE id=?', t.id); return json(200, {}); }
+      if (m === 'DELETE') { this.sql.exec('UPDATE tasks SET thread_id=NULL WHERE thread_id=?', t.id); this.sql.exec('DELETE FROM jobs WHERE thread_id=?', t.id); this.sql.exec('DELETE FROM thread_messages WHERE thread_id=?', t.id); this.sql.exec('DELETE FROM threads WHERE id=?', t.id); return json(200, {}); }
       if (threadRoute[2] === '/cancel' && m === 'POST') {
         const j = this.one('SELECT id, status FROM jobs WHERE thread_id=?', t.id);
         if (j?.status === 'queued') { this.sql.exec('DELETE FROM jobs WHERE id=?', j.id); this.addTurn(t.id, 'error', '중지했어요.'); }
