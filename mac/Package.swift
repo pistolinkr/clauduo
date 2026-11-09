@@ -1,8 +1,8 @@
-// swift-tools-version:5.9
+// swift-tools-version:6.2
 import PackageDescription
 
 let package = Package(
     name: "Clauduo",
-    platforms: [.macOS(.v13)],
-    targets: [.executableTarget(name: "Clauduo", path: "Sources/Clauduo")]
+    platforms: [.macOS(.v26)],
+    targets: [.executableTarget(name: "Clauduo", path: "Sources/Clauduo", swiftSettings: [.swiftLanguageMode(.v5)])]
 )
