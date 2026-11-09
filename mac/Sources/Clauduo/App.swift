@@ -9,19 +9,19 @@ enum Keychain {
     private static var dir: URL { FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("Clauduo/tokens") }
     private static func file(_ key: String) -> URL { dir.appendingPathComponent(sha(Data(key.utf8))) }
     private static func query(_ key: String) -> [String: Any] { [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: "com.clauduo.mac", kSecAttrAccount as String: key] }
-    static func load(_ key: String) -> String? {
-        if let v = try? String(contentsOf: file(key), encoding: .utf8) { return v }
+    static func load(_ key: String) -> String? { try? String(contentsOf: file(key), encoding: .utf8) }
+    /// 이전 버전이 키체인에 넣어 둔 토큰을 옮긴다. macOS 권한 창이 뜨므로 사용자가 눌렀을 때만 호출한다.
+    static func recover(_ key: String) {
         var q = query(key); q[kSecReturnData as String] = true
         var out: AnyObject?
-        guard SecItemCopyMatching(q as CFDictionary, &out) == errSecSuccess, let d = out as? Data, let v = String(data: d, encoding: .utf8) else { return nil }
-        save(key, v); SecItemDelete(query(key) as CFDictionary) // 이전 버전의 저장 위치에서 옮긴다
-        return v
+        guard SecItemCopyMatching(q as CFDictionary, &out) == errSecSuccess, let d = out as? Data, let v = String(data: d, encoding: .utf8) else { return }
+        save(key, v); SecItemDelete(query(key) as CFDictionary)
     }
     static func save(_ key: String, _ v: String) {
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         FileManager.default.createFile(atPath: file(key).path, contents: Data(v.utf8), attributes: [.posixPermissions: 0o600])
     }
-    static func clear(_ key: String) { try? FileManager.default.removeItem(at: file(key)); SecItemDelete(query(key) as CFDictionary) }
+    static func clear(_ key: String) { try? FileManager.default.removeItem(at: file(key)) }
 }
 
 /// config가 nil이면 이 Mac에 이미 로그인된 기본 계정이다.
@@ -35,7 +35,7 @@ enum Accounts {
     static var list: [Account] {
         get {
             if let d = UserDefaults.standard.data(forKey: "accounts"), let a = try? JSONDecoder().decode([Account].self, from: d) { return a }
-            return Keychain.load("agent-token") == nil ? [] : [Account(key: "agent-token", name: "기본 계정", agentId: "", ws: "", config: nil)] // 이전 버전의 연결
+            return []
         }
         set { UserDefaults.standard.set(try? JSONEncoder().encode(newValue), forKey: "accounts") }
     }
@@ -144,7 +144,13 @@ enum Destination: Hashable { case view(String), thread(String), agent(String) }
 
     @Published var update: UpdateInfo?
     @Published var updating = false
-    init() {
+    private var begun = false
+    var missingTokens: [Account] { accounts.filter { Keychain.load($0.key) == nil } }
+    func recoverTokens() { for a in missingTokens { Keychain.recover(a.key); start(a) }; objectWillChange.send() }
+
+    /// 동의 전에는 계정, 네트워크, 키체인을 건드리지 않는다.
+    func begin() {
+        guard !begun else { return }; begun = true
         accounts.forEach(start)
         Task { for _ in 0... { await refreshUpdate(); try? await Task.sleep(nanoseconds: 6 * 3600 * 1_000_000_000) } }
     }
@@ -275,6 +281,7 @@ struct Sidebar: View {
                     .contextMenu { if let local { Button("이 Mac에서 제거", role: .destructive) { Task { await model.remove(local) } } } }
                 }
                 if model.site?.agents.isEmpty ?? true { Text("연결된 계정이 없어요.").foregroundStyle(.secondary) }
+                if !model.missingTokens.isEmpty { Button("이전 연결 복구 (\(model.missingTokens.count))") { model.recoverTokens() }.help("이전 버전이 키체인에 저장한 연결을 가져와요. macOS가 권한을 물어볼 수 있어요.") }
                 Toggle("전체 권한 허용", isOn: $fullAccess).help("켜면 입력창에서 '전체 권한'을 고른 작업이 확인 없이 명령을 실행해요.")
             } header: {
                 HStack { Text("Claude 계정"); Spacer(); Button { model.showAdd = true } label: { Image(systemName: "plus") }.buttonStyle(.plain).accessibilityLabel("계정 추가") }
@@ -510,10 +517,53 @@ struct Root: View {
     }
 }
 
+/// 첫 실행 안내와 동의. 내용을 바꾸면 consentVersion을 올려 다시 동의받는다.
+struct Onboarding: View {
+    let agree: () -> Void
+    @State private var checked = false
+    private let items: [(String, String, String)] = [
+        ("laptopcomputer", "내 Mac에서 실행", "허용한 폴더에서 이 Mac의 Claude Code가 파일을 읽고 고치며, 선택한 권한에 따라 명령을 실행해요."),
+        ("icloud", "서버에 저장되는 내용", "대화, 작업 기록, 파일 변경 내용, 아티팩트, 불러온 세션은 Clauduo 서버(Cloudflare)에 저장돼요. 팀 작업은 워크스페이스 멤버에게 보이고, 불러온 세션은 나에게만 보여요."),
+        ("key", "로그인과 연결 정보", "Claude 로그인은 Claude의 공식 절차로 진행되고 Clauduo 서버로 보내지 않아요. Clauduo 연결 토큰은 이 Mac의 사용자 전용 파일에 저장돼요."),
+        ("exclamationmark.triangle", "베타 서비스", "기능과 데이터가 바뀌거나 사라질 수 있어요. 중요한 파일은 따로 백업해 주세요. Claude 사용량과 요금, 각 계정의 약관 준수는 사용자 책임이에요."),
+        ("building.2", "독립 서비스", "Clauduo는 Anthropic과 제휴 관계가 없는 독립 서비스예요."),
+    ]
+    var body: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            Text("Clauduo 시작하기").font(.custom("Pretendard Variable", size: 26).weight(.semibold))
+            Text("사용 전에 아래 내용을 확인해 주세요.").foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 14) {
+                ForEach(items, id: \.1) { icon, title, text in
+                    HStack(alignment: .top, spacing: 12) {
+                        Image(systemName: icon).frame(width: 22).foregroundStyle(.secondary).accessibilityHidden(true)
+                        VStack(alignment: .leading, spacing: 2) { Text(title).fontWeight(.semibold); Text(text).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true) }
+                    }
+                }
+            }
+            Toggle("위 내용을 확인했고 동의합니다", isOn: $checked)
+            HStack {
+                Button("종료") { NSApp.terminate(nil) }
+                Spacer()
+                Button("동의하고 시작하기") { agree() }.buttonStyle(.glassProminent).disabled(!checked)
+            }
+        }
+        .font(.custom("Pretendard Variable", size: 14))
+        .padding(30).frame(width: 540)
+        .glassEffect(in: .rect(cornerRadius: 24))
+        .frame(minWidth: 1000, maxWidth: .infinity, minHeight: 680, maxHeight: .infinity)
+    }
+}
+
+let consentVersion = 1
+
 struct ClauduoApp: App {
     @StateObject private var model = Model()
+    @AppStorage("consentVersion") private var agreed = 0
     var body: some Scene {
-        WindowGroup("Clauduo") { Root(model: model) }.windowToolbarStyle(.unified)
+        WindowGroup("Clauduo") {
+            if agreed >= consentVersion { Root(model: model).onAppear { model.begin() } }
+            else { Onboarding { agreed = consentVersion } }
+        }.windowToolbarStyle(.unified)
             .commands { CommandGroup(after: .appInfo) { Button("업데이트 확인…") { Task { await model.refreshUpdate(announce: true); if model.update != nil { await model.installUpdate() } } } } }
     }
 }
