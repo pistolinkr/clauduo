@@ -400,6 +400,7 @@ struct Root: View {
                 }
             }
         }
+        .font(.custom("Pretendard Variable", size: 13))
         .frame(minWidth: 1000, minHeight: 680)
         .sheet(isPresented: $model.showAdd) { AddAccount(model: model) }
         .sheet(isPresented: $model.showImport) { ImportSessions(model: model) }

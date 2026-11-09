@@ -6,6 +6,7 @@ swift build -c release
 APP=dist/Clauduo.app
 rm -rf "$APP"; mkdir -p "$APP/Contents/MacOS"
 cp .build/release/Clauduo "$APP/Contents/MacOS/Clauduo"
+mkdir -p "$APP/Contents/Resources"; cp Resources/* "$APP/Contents/Resources/"
 cat > "$APP/Contents/Info.plist" <<'EOF'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -18,6 +19,7 @@ cat > "$APP/Contents/Info.plist" <<'EOF'
 <key>CFBundleVersion</key><string>1</string>
 <key>LSMinimumSystemVersion</key><string>26.0</string>
 <key>NSHighResolutionCapable</key><true/>
+<key>ATSApplicationFontsPath</key><string>.</string>
 </dict></plist>
 EOF
 codesign --force --deep -s - "$APP"

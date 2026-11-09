@@ -79,6 +79,10 @@ const mock = http.createServer(async (req, res) => {
 
     const r0 = await fetch(`${U}/api/me`, { method: 'POST', headers: { 'content-type': 'application/json', origin: 'https://evil.example' }, body: '{}' });
     assert.equal(r0.status, 403, 'cross origin rejected');
+    const r1 = await fetch(`${U}/api/me`, { method: 'POST', headers: { 'content-type': 'application/json', origin: 'null', 'sec-fetch-site': 'same-origin' }, body: '{}' });
+    assert.equal(r1.status, 401, 'webview same-origin request passes the origin check');
+    const r2 = await fetch(`${U}/api/me`, { method: 'POST', headers: { 'content-type': 'application/json', origin: 'https://evil.example', 'sec-fetch-site': 'cross-site' }, body: '{}' });
+    assert.equal(r2.status, 403, 'cross-site fetch rejected');
 
     const ws = (await A('POST', '/api/workspaces', { name: 'Team' })).j.id, W = p => `/api/w/${ws}${p}`;
     assert.equal((await B('GET', W('/state'))).s, 404, 'tenant isolation');

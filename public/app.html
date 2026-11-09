@@ -4,11 +4,12 @@
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Clauduo</title>
 <style>
+@font-face { font-family: "Pretendard Variable"; src: url("/fonts/PretendardVariable.woff2") format("woff2-variations"); font-weight: 45 920; font-display: swap; }
 :root { color-scheme: light dark;
   --bg: light-dark(#faf9f5,#262624); --side: light-dark(#f0eee6,#1f1e1d); --card: light-dark(#fff,#30302e); --hover: light-dark(#e8e6dc,#3a3936); --line: light-dark(#e3e0d5,#40403c);
   --text: light-dark(#1f1e1d,#f5f4ef); --dim: light-dark(#73726c,#a6a59c); --accent: #c96442; --primary: light-dark(#1f1e1d,#f5f4ef); --on-primary: light-dark(#fff,#1f1e1d); --ok: #3fa66b; --bad: #d4483f; }
 * { box-sizing: border-box; } [hidden] { display: none !important; }
-body { margin: 0; height: 100dvh; background: var(--bg); color: var(--text); font: 15px/1.6 system-ui,-apple-system,"Apple SD Gothic Neo",sans-serif; -webkit-font-smoothing: antialiased; }
+body { margin: 0; height: 100dvh; background: var(--bg); color: var(--text); font: 15px/1.6 "Pretendard Variable",system-ui,sans-serif; -webkit-font-smoothing: antialiased; }
 button,input,textarea,select { font: inherit; color: inherit; }
 input,select { background: var(--card); border: 1px solid var(--line); border-radius: 9px; padding: 8px 11px; }
 button { background: transparent; border: 1px solid var(--line); border-radius: 9px; padding: 7px 12px; cursor: pointer; font-weight: 500; transition: background .15s ease; } button:hover:not(:disabled) { background: var(--hover); } button:disabled { opacity: .4; cursor: default; }
@@ -23,7 +24,7 @@ svg.i { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-widt
 .th { flex: none; } .th span.t { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; } .env { font-size: 11px; color: var(--dim); flex: none; } .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); animation: pulse 1.2s infinite; flex: none; } @keyframes pulse { 50% { opacity: .3; } } @media (prefers-reduced-motion: reduce) { .dot { animation: none; } }
 .foot { font-size: 12px; color: var(--dim); display: flex; justify-content: space-between; gap: 6px; padding: 8px 8px 2px; border-top: 1px solid var(--line); } .foot span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } .link { border: 0; padding: 0; background: none !important; color: var(--accent); font-size: 12px; }
 main { min-width: 0; min-height: 0; display: flex; flex-direction: column; } .view { flex: 1; min-height: 0; display: flex; flex-direction: column; } .col { width: 100%; max-width: 760px; margin: 0 auto; padding: 0 20px; }
-#home { justify-content: center; } #home h1 { font: 400 clamp(27px,3.6vw,36px)/1.3 ui-serif,Georgia,"AppleMyungjo",serif; text-align: center; margin: 0 0 22px; }
+#home { justify-content: center; } #home h1 { font: 400 clamp(27px,3.6vw,36px)/1.3 "Pretendard Variable",system-ui,sans-serif; text-align: center; margin: 0 0 22px; }
 .box { background: var(--card); border: 1px solid var(--line); border-radius: 18px; padding: 12px 12px 9px 16px; box-shadow: 0 2px 10px rgb(0 0 0 / .05); } .box textarea { width: 100%; border: 0; background: none; resize: none; min-height: 60px; max-height: 40dvh; display: block; padding: 2px 0; } .boxbar { display: flex; align-items: center; gap: 8px; justify-content: space-between; } .boxbar select { border-color: transparent; background: var(--hover); padding: 4px 8px; font-size: 13px; max-width: 72%; min-width: 0; } .boxbar .e { font-size: 13px; color: var(--dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } .send { border-radius: 10px; padding: 5px 13px; background: var(--accent); border-color: var(--accent); color: #fff; flex: none; } .send:hover:not(:disabled) { background: var(--accent); opacity: .88; }
 .thead { flex: none; padding: 13px 20px; border-bottom: 1px solid var(--line); display: flex; align-items: center; gap: 10px; min-width: 0; } .thead b { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; } .thead .env { font-size: 12px; flex: none; }
 .scroll { flex: 1; min-height: 0; overflow: auto; padding: 22px 0; } #turns { display: flex; flex-direction: column; gap: 18px; } .composer { flex: none; padding: 8px 0 18px; }
@@ -33,7 +34,7 @@ details.f { margin-top: 8px; font-size: 13px; } details.f > summary { cursor: po
 .empty { color: var(--dim); text-align: center; margin: 24px auto; font-size: 14px; }
 #filesView { flex-direction: row; } #files { width: 260px; flex: none; overflow: auto; padding: 14px 10px; border-right: 1px solid var(--line); } .dir { font-size: 12px; color: var(--dim); padding: 7px 8px 2px; } .fb { display: block; width: 100%; border: 0; text-align: left; font-weight: 400; font-size: 13.5px; padding: 3px 8px 3px 16px; overflow-wrap: anywhere; } .fb.on { background: var(--hover); } #editWrap { flex: 1; min-width: 0; display: flex; flex-direction: column; } .fbar { display: flex; gap: 8px; align-items: center; padding: 10px 14px; flex: none; border-bottom: 1px solid var(--line); } #cur { flex: 1; font-size: 13.5px; font-weight: 550; min-width: 0; overflow-wrap: anywhere; } #newPath { width: 180px; padding: 5px 9px; font-size: 13px; } .fbar button { padding: 5px 10px; } #editor { flex: 1; min-height: 0; border: 0; background: none; resize: none; padding: 14px 18px; font: 13px/1.65 ui-monospace,monospace; }
 .team { display: flex; flex-direction: column; gap: 22px; } .row { display: flex; align-items: center; gap: 10px; padding: 7px 0; border-bottom: 1px solid var(--line); } .row .n { flex: 1; min-width: 0; } .row small { color: var(--dim); display: block; line-height: 1.3; font-size: 12px; } .row b { font-weight: 550; } .team h2 { font-size: 16px; margin: 0 0 6px; display: flex; justify-content: space-between; align-items: center; } .rm { border: 0; padding: 5px; color: var(--dim); display: inline-flex; } .rm:hover:not(:disabled) { color: var(--bad); background: none; }
-.center { max-width: 390px; width: calc(100% - 32px); margin: 15vh auto 0; display: flex; flex-direction: column; gap: 12px; text-align: center; } .center h1 { font: 400 28px/1.3 ui-serif,Georgia,"AppleMyungjo",serif; margin: 0; } .center p { margin: 0; color: var(--dim); font-size: 14px; word-break: keep-all; } .center form { display: flex; flex-direction: column; gap: 8px; } #err,#codeErr { color: var(--bad); font-size: 13px; }
+.center { max-width: 390px; width: calc(100% - 32px); margin: 15vh auto 0; display: flex; flex-direction: column; gap: 12px; text-align: center; } .center h1 { font: 400 28px/1.3 "Pretendard Variable",system-ui,sans-serif; margin: 0; } .center p { margin: 0; color: var(--dim); font-size: 14px; word-break: keep-all; } .center form { display: flex; flex-direction: column; gap: 8px; } #err,#codeErr { color: var(--bad); font-size: 13px; }
 dialog { border: 1px solid var(--line); border-radius: 15px; background: var(--card); color: var(--text); width: min(430px,calc(100vw - 32px)); padding: 20px; } dialog::backdrop { background: rgb(0 0 0 / .45); } dialog h3 { margin: 0 0 4px; font-size: 17px; } dialog p { margin: 0 0 12px; color: var(--dim); font-size: 13.5px; } .stack { display: flex; flex-direction: column; gap: 8px; } .acts { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; } .modes { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; } .modes label { border: 1px solid var(--line); border-radius: 10px; padding: 10px; cursor: pointer; font-size: 13px; line-height: 1.35; } .modes label:has(input:checked) { border-color: var(--accent); } .modes input { position: absolute; opacity: 0; } .modes b { display: block; font-size: 14px; } .modes small { color: var(--dim); } code { display: block; user-select: all; overflow-wrap: anywhere; font: 12px/1.5 ui-monospace,monospace; background: var(--bg); border-radius: 8px; padding: 10px; } #inv { width: 100%; }
 html.native #side,html.native #menuBtn { display: none !important; } html.native #app { grid-template-columns: minmax(0,1fr); }
 .seg { display: grid; grid-template-columns: 1fr 1fr; gap: 2px; background: var(--hover); border-radius: 10px; padding: 2px; margin-bottom: 6px; } .seg button { justify-content: center; padding: 4px; border-radius: 8px; } .seg button.on { background: var(--card); font-weight: 600; }
@@ -57,11 +58,11 @@ html.native #side,html.native #menuBtn { display: none !important; } html.native
 </svg>
 
 <div id="auth" class="center" hidden><h1>Clauduo</h1><p id="authMsg">이메일로 로그인 링크와 코드를 보내드려요. 처음이면 자동으로 가입돼요.</p>
-  <form id="authForm"><input id="email" type="email" required placeholder="you@example.com" aria-label="이메일" autocomplete="email"><button class="p">계속하기</button></form><div id="err" role="alert"></div></div>
+  <form id="authForm"><input id="email" type="email" required placeholder="you@example.com" aria-label="이메일" autocomplete="email"><button class="p">계속하기</button></form><button type="button" class="joinOpen">초대 링크로 들어가기</button><div id="err" role="alert"></div></div>
 <div id="sent" class="center" hidden><h1>메일을 확인해 주세요</h1><p><b id="sentTo"></b> 로 보낸 링크를 열거나 6자리 코드를 입력하세요.</p>
   <form id="codeForm"><input id="code" inputmode="numeric" maxlength="6" required placeholder="6자리 코드" aria-label="로그인 코드" autocomplete="one-time-code"><button class="p">로그인</button></form><div id="codeErr" role="alert"></div></div>
 <div id="first" class="center" hidden><h1>워크스페이스 만들기</h1><p>팀이나 프로젝트 이름이면 충분해요.</p>
-  <form id="firstForm"><input id="firstName" required maxlength="60" placeholder="예: 우리 팀" aria-label="워크스페이스 이름"><button class="p">만들기</button></form></div>
+  <form id="firstForm"><input id="firstName" required maxlength="60" placeholder="예: 우리 팀" aria-label="워크스페이스 이름"><button class="p">만들기</button></form><button type="button" class="joinOpen">초대 링크로 들어가기</button></div>
 
 <div id="app" hidden>
   <button id="menuBtn" aria-label="메뉴"><svg class="i"><use href="#menu"/></svg></button>
@@ -111,7 +112,7 @@ html.native #side,html.native #menuBtn { display: none !important; } html.native
       <div id="macBox" hidden><h2>이 Mac</h2><div class="row"><div class="n"><b>로컬 실행</b><small>연결하면 입력창에서 이 Mac의 폴더를 고를 수 있어요.</small></div><button id="macConnect">연결</button><button id="macFolder">폴더 허용</button></div></div>
       <div><h2>팀원 <button id="invOpen">초대</button></h2><div id="members"></div></div>
       <div><h2>워크스페이스</h2><select id="wsSel" aria-label="워크스페이스 선택" style="width:100%"></select></div>
-      <div style="display:flex;gap:14px"><button class="link" id="wsNew">새 워크스페이스</button><button class="link" id="wsDel" hidden>이 워크스페이스 삭제</button></div>
+      <div style="display:flex;gap:14px"><button class="link joinOpen">초대 링크로 들어가기</button><button class="link" id="wsNew">새 워크스페이스</button><button class="link" id="wsDel" hidden>이 워크스페이스 삭제</button></div>
     </div></div></section>
   </main>
 </div>
@@ -123,6 +124,7 @@ html.native #side,html.native #menuBtn { display: none !important; } html.native
     <p id="keyNote" style="margin:0">키는 암호화해 저장하고, 사용량은 본인 Anthropic 계정에 청구돼요.</p>
     <div class="acts"><button type="button" id="agentClose">닫기</button><button class="p" id="agentBtn">추가</button></div></form></dialog>
 <dialog id="cmdDlg"><h3>터미널에서 연결하기</h3><p>Claude Code에 로그인된 터미널에서 실행하고 창을 열어 두세요. 토큰은 지금만 표시돼요.</p><code id="cmd"></code><div class="acts"><button id="cmdClose">닫기</button><button class="p" id="cmdCopy">복사</button></div></dialog>
+<dialog id="joinDlg"><h3>초대 링크로 들어가기</h3><p>받은 초대 링크를 붙여넣어 주세요.</p><form id="joinForm"><input id="joinLink" required placeholder="https://clauduo.com/app#invite=..." aria-label="초대 링크" autocomplete="off" style="width:100%"><div id="joinErr" role="alert" style="color:var(--bad);font-size:13px;margin-top:6px"></div><div class="acts"><button type="button" id="joinClose">닫기</button><button class="p">들어가기</button></div></form></dialog>
 <dialog id="invDlg"><h3>팀원 초대</h3><p>한 번만 쓸 수 있고 7일 동안 유효한 링크예요.</p><input id="inv" readonly aria-label="초대 링크"><div class="acts"><button id="invClose">닫기</button><button class="p" id="invCopy">복사</button></div></dialog>
 
 <script>
@@ -332,6 +334,15 @@ $('customSave').onclick = guard(async () => { await api('POST', w('/instructions
 $('customMac').onclick = () => bridge?.postMessage('customize');
 for (const [b, n] of [['navSearch', 'search'], ['navArtifacts', 'artifacts'], ['navSchedule', 'schedule'], ['navCustom', 'custom']]) $(b).onclick = () => show(n);
 for (const t of [$('newText'), $('turnText'), $('text')]) t.addEventListener('input', () => { t.style.height = 'auto'; t.style.height = t.scrollHeight + 'px'; });
+document.querySelectorAll('.joinOpen').forEach(b => b.onclick = () => { $('joinErr').textContent = ''; $('joinLink').value = ''; $('joinDlg').showModal(); });
+$('joinClose').onclick = () => $('joinDlg').close();
+$('joinForm').onsubmit = async e => {
+  e.preventDefault(); $('joinErr').textContent = '';
+  const v = $('joinLink').value.trim(), t = /[#&?]invite=([\w-]{20,})/.exec(v)?.[1] || (/^[\w-]{20,}$/.test(v) ? v : null);
+  if (!t) { $('joinErr').textContent = '초대 링크를 확인해 주세요.'; return; }
+  pendingInvite = t; $('joinDlg').close();
+  boot().catch(x => alert(x.message)); // 로그인 전이면 로그인 후 자동으로 참여한다
+};
 const enter = (ta, f) => ta.onkeydown = e => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && e.keyCode !== 229) { e.preventDefault(); f.requestSubmit(); } };
 enter($('newText'), $('newForm')); enter($('turnText'), $('turnForm')); enter($('text'), $('send'));
 function openAdd() { $('agentDlg').showModal(); }

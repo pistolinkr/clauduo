@@ -643,7 +643,9 @@ async function handle(req, env) {
 
   if (m !== 'GET') { // 쿠키 인증 요청의 CSRF 방어
     const origin = req.headers.get('origin');
-    if (origin && origin !== env.BASE_URL) return json(403, { error: '허용되지 않은 출처' });
+    // Sec-Fetch-Site는 브라우저가 직접 붙여서 다른 사이트가 위조할 수 없다. 일부 웹뷰는 Origin을 다르게 보낸다.
+    const sameSite = req.headers.get('sec-fetch-site') === 'same-origin' || origin === env.BASE_URL || origin === u.origin;
+    if (origin && !sameSite) return json(403, { error: '허용되지 않은 출처' });
     if (!(req.headers.get('content-type') || '').startsWith('application/json')) return json(415, { error: 'JSON만 받아요' });
   }
   const body = m === 'GET' ? {} : await readBody(req, MAX_BODY);
